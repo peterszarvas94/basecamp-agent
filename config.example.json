@@ -5,7 +5,7 @@
   "codex_bin": "codex",
   "claude_bin": "claude",
   "work_dir": "/home/USER/Projects",
-  "state_path": "/home/USER/.local/state/basecamp-webhook-agent/state.json",
+  "state_path": "/home/USER/.local/state/basecamp-agent/state.json",
   "allowed_account_id": 123456,
   "allowed_project_ids": [
     123456

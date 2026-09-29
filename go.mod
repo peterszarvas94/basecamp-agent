@@ -1,4 +1,4 @@
-module github.com/peterszarvas94/basecamp-webhook-agent
+module github.com/peterszarvas94/basecamp-agent
 
 go 1.24
 

@@ -17,8 +17,10 @@ Claude CLIs. Its main pieces are:
 - `worktree.go`: repository selection, worktrees, branch publishing, and PRs.
 - `github.go`: signed GitHub PR webhooks and Basecamp card transitions.
 - `ops.go`: job persistence, recovery, retry/stop actions, and operator UI.
+- `endpoint.go`: the public URL, its health check, and moving Basecamp and
+  GitHub webhooks when it changes.
 
-Public HTTP routes are `/healthz`, `/webhook`, `/github/webhook`, and the
+Public HTTP routes are `/` (liveness), `/webhook`, `/github/webhook`, and the
 optional `/ops` dashboard.
 
 ## CLI design
@@ -45,8 +47,8 @@ stored in the external config with mode `0600`. Never print secrets from
 
 ## Configuration and repositories
 
-Live config defaults to `~/.config/basecamp-webhook-agent/config.json`; state
-defaults to `~/.local/state/basecamp-webhook-agent/state.json`.
+Live config defaults to `~/.config/basecamp-agent/config.json`; state
+defaults to `~/.local/state/basecamp-agent/state.json`.
 `config.example.json` is the checked-in reference.
 
 `allowed_repos` entries contain `name`, `path`, and optional `aliases`.
@@ -58,6 +60,14 @@ Work runs in `worktree_root/<repo>/<agent>/bc-<event-id>` from `origin/HEAD`.
 The dispatcher verifies the branch and clean status, pushes only the feature
 branch, opens a PR, and never merges. Clean worktrees without commits are
 removed. Dirty, failed, and PR-bearing worktrees remain for recovery or review.
+
+## Public URL
+
+`public_url` is installation-global and never belongs to a repository or
+Basecamp project. The CLI does not create or manage tunnels: users supply any
+stable HTTPS URL that forwards to `listen`, and the README suggests tunnel
+options. `endpoint set` removes webhooks for the previous URL before syncing
+the new one. Never bake a specific host into code, examples, or the installer.
 
 ## Basecamp trust boundaries
 
@@ -114,10 +124,10 @@ Security invariants:
 Use Go 1.24 or newer. Run:
 
 ```sh
-gofmt -w cmd/basecamp-webhook-agent/*.go
+gofmt -w cmd/basecamp-agent/*.go
 go test -race ./...
 go vet ./...
-go build ./cmd/basecamp-webhook-agent
+go build ./cmd/basecamp-agent
 sh -n install.sh
 git diff --check
 ```
@@ -125,10 +135,10 @@ git diff --check
 Before pushing any repository change:
 
 1. Install the current worktree build into the local binary path:
-   `GOBIN="$HOME/.local/bin" go install ./cmd/basecamp-webhook-agent`.
+   `GOBIN="$HOME/.local/bin" go install ./cmd/basecamp-agent`.
 2. Use that freshly installed binary for any setup or configuration operations
    required by the change. At minimum, validate the existing external config
-   with `basecamp-webhook-agent config validate`.
+   with `basecamp-agent config validate`.
 3. If the user service is active and runtime behavior changed, restart it and
    verify that it remains active.
 4. Push only after installation and local validation succeed.
@@ -136,19 +146,19 @@ Before pushing any repository change:
 Never replace the external live config with example data, and never stage it.
 
 In restricted environments, set `GOCACHE` to a writable directory such as
-`/tmp/basecamp-webhook-agent-gocache`.
+`/tmp/basecamp-agent-gocache`.
 
 Optional live tests:
 
 ```sh
-BASECAMP_CHAT_TEST_LINE=<line-id> go test ./cmd/basecamp-webhook-agent
-BASECAMP_WORKTREE_TEST=1 go test -run TestPrepareWorktreeLive ./cmd/basecamp-webhook-agent
-BASECAMP_ASSIGNMENT_TEST=1 go test -run TestAssignmentActorMayDifferFromTodoCreator ./cmd/basecamp-webhook-agent
+BASECAMP_CHAT_TEST_LINE=<line-id> go test ./cmd/basecamp-agent
+BASECAMP_WORKTREE_TEST=1 go test -run TestPrepareWorktreeLive ./cmd/basecamp-agent
+BASECAMP_ASSIGNMENT_TEST=1 go test -run TestAssignmentActorMayDifferFromTodoCreator ./cmd/basecamp-agent
 ```
 
 Replay commands accept verified events from the last two hours:
 
 ```sh
-basecamp-webhook-agent serve --replay-chat-event <event-id>
-basecamp-webhook-agent serve --replay-todo-assignment <event-id>
+basecamp-agent serve --replay-chat-event <event-id>
+basecamp-agent serve --replay-todo-assignment <event-id>
 ```

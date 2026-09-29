@@ -69,9 +69,145 @@ func TestConfigShowRedactsSecrets(t *testing.T) {
 
 func TestNestedCommandHelp(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "config.json")
-	for _, args := range [][]string{{"github", "repo", "add", "--help"}, {"basecamp", "project", "add", "--help"}} {
+	for _, args := range [][]string{{"install", "--help"}, {"dependencies", "check", "--help"}, {"github", "repo", "add", "--help"}, {"github", "repo", "create", "--help"}, {"railway", "deploy", "--help"}, {"basecamp", "project", "add", "--help"}} {
 		if _, err := runCLIForTest(t, config, args...); err != nil {
 			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestInstallCommandsAreComposableAndDryRunnable(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	out, err := runCLIForTest(t, config, "--dry-run", "install", "--force", "basecamp", "codex", "railway", "tailscale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"go install github.com/basecamp/basecamp-cli/cmd/basecamp@latest",
+		"npm install --global @openai/codex@latest",
+		"curl -fsSL https://railway.com/install.sh | sh",
+		"curl -fsSL https://tailscale.com/install.sh | sh",
+		"basecamp: would install",
+		"railway: would install",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("install output does not contain %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestNonInteractiveSetupConfiguresRepository(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runCLIForTest(t, config,
+		"--non-interactive", "setup",
+		"--repo", repo,
+		"--repo-name", "agent",
+		"--repo-alias", "dispatcher",
+		"--public-url", "https://agent.example.test/",
+		"--account", "1",
+		"--project", "2",
+		"--creator", "3",
+		"--codex-person-id", "4",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "https://agent.example.test" || cfg.AllowedAccountID != 1 || cfg.ProjectRepos["2"] != "agent" {
+		t.Fatalf("unexpected setup config: %+v", cfg)
+	}
+	if cfg.BotIDs["codex"] != 4 || cfg.BotProfiles["codex"] != "codex-bot" {
+		t.Fatalf("unexpected agent config: %+v %+v", cfg.BotIDs, cfg.BotProfiles)
+	}
+	if len(cfg.AllowedRepos) != 1 || cfg.AllowedRepos[0].Path != repo || len(cfg.AllowedRepos[0].Aliases) != 1 {
+		t.Fatalf("unexpected repository config: %+v", cfg.AllowedRepos)
+	}
+	// Reconciliation is idempotent.
+	if _, err := runCLIForTest(t, config, "--non-interactive", "setup", "--repo", repo, "--repo-name", "agent", "--project", "2"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig(config)
+	if len(cfg.AllowedRepos) != 1 || len(cfg.AllowedProjectIDs) != 1 {
+		t.Fatalf("setup is not idempotent: %+v", cfg)
+	}
+}
+
+func TestRailwayDeployUsesRailwayCLI(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	out, err := runCLIForTest(t, config, "--dry-run", "--non-interactive", "railway", "deploy", ".", "--new", "--name", "agent", "--project", "project-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"railway up", "--new", "--yes", "--name agent", "--project project-id"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("railway output does not contain %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRailwayDeployUsesGlobalRepositoryContextAndFlagOverrides(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	repo := t.TempDir()
+	cfg := defaultConfig()
+	cfg.AllowedRepos = AllowedRepoList{{
+		Name: "app", Path: repo,
+		Railway: RailwayRepoConfig{Project: "stored-project", Service: "stored-service", Environment: "production"},
+	}}
+	if err := writeConfig(config, cfg, false, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIForTest(t, config, "--dry-run", "railway", "deploy", repo, "--service", "override-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"(in " + repo + ") railway up", "--project stored-project", "--service override-service", "--environment production"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("railway output does not contain %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "stored-service") {
+		t.Fatalf("explicit flag did not override global config:\n%s", out)
+	}
+}
+
+func TestRailwayConfigureStoresContextInGlobalConfig(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	repo := t.TempDir()
+	cfg := defaultConfig()
+	cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: repo}}
+	if err := writeConfig(config, cfg, false, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLIForTest(t, config, "railway", "configure", repo, "--project", "project-id", "--service", "app", "--environment", "production", "--domain", "https://app.example.test/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.AllowedRepos[0].Railway
+	if got.Project != "project-id" || got.Service != "app" || got.Environment != "production" || got.Domain != "https://app.example.test" {
+		t.Fatalf("unexpected Railway config: %+v", got)
+	}
+}
+
+func TestRailwayDomainUsesRailwayCLI(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	out, err := runCLIForTest(t, config, "--dry-run", "railway", "domain", "--project", "project-id", "--service", "service-id", "--port", "8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"railway domain", "--project project-id", "--service service-id", "--port 8080"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("railway domain output does not contain %q:\n%s", want, out)
 		}
 	}
 }

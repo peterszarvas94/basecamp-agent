@@ -6,8 +6,11 @@ state.json
 .env.*
 
 # Local builds
-/basecamp-webhook-agent
+/basecamp-agent
 *.test
 
 # Pi session exports
 pi-session-*.html
+
+# Agent session exports
+codex-session-*.md

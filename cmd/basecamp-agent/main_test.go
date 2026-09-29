@@ -97,7 +97,7 @@ func TestFailureMessageLeadsWithTheCause(t *testing.T) {
 		"Reading additional input from stdin...",
 		"OpenAI Codex v0.158.0",
 		"--------",
-		"workdir: /home/tester/.local/state/basecamp-webhook-agent/worktrees/restaurant/codex/bc-1",
+		"workdir: /home/tester/.local/state/basecamp-agent/worktrees/restaurant/codex/bc-1",
 		"approval: never",
 		"--------",
 		"user",

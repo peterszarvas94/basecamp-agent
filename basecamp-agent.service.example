@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/basecamp-webhook-agent -config %h/.config/basecamp-webhook-agent/config.json
+ExecStart=%h/.local/bin/basecamp-agent serve --config %h/.config/basecamp-agent/config.json
 Restart=on-failure
 RestartSec=5
 

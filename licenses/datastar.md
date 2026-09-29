@@ -1,6 +1,6 @@
 # Datastar
 
-`cmd/basecamp-webhook-agent/static/datastar.js` is Datastar v1.0.0-RC.7 from
+`cmd/basecamp-agent/static/datastar.js` is Datastar v1.0.0-RC.7 from
 the [Star Federation Datastar project](https://github.com/starfederation/datastar/tree/v1.0.0-RC.7).
 
 Copyright © Star Federation

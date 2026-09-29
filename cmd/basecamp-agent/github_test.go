@@ -69,3 +69,14 @@ func TestGitHubWebhookRequiresSignatureAndAnswersPing(t *testing.T) {
 		t.Fatalf("signed ping = %d %q", signedResponse.Code, signedResponse.Body.String())
 	}
 }
+
+func TestRootAnswersForPublicURLChecks(t *testing.T) {
+	h := (&Server{}).routes()
+	for path, want := range map[string]int{"/": http.StatusOK, "/healthz": http.StatusNotFound, "/missing": http.StatusNotFound} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Fatalf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}

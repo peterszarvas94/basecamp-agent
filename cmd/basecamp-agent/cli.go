@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,7 +55,7 @@ func normalizeLegacyArgs(args []string) []string {
 func newRootCommand(opts *cliOptions) *cobra.Command {
 	var replayChat, replayAssignment int64
 	root := &cobra.Command{
-		Use:           "basecamp-webhook-agent",
+		Use:           "basecamp-agent",
 		Short:         "Dispatch trusted Basecamp work to local coding agents",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -71,8 +73,174 @@ func newRootCommand(opts *cliOptions) *cobra.Command {
 	root.Flags().Int64Var(&replayChat, "replay-chat-event", 0, "retry a verified chat event by ID")
 	root.Flags().Int64Var(&replayAssignment, "replay-todo-assignment", 0, "retry a verified todo assignment event by ID")
 
-	root.AddCommand(newServeCommand(opts), newSetupCommand(opts), newDoctorCommand(opts), newConfigCommand(opts), newAgentCommand(opts), newGitHubCommand(opts), newBasecampCommand(opts), newServiceCommand(opts))
+	root.AddCommand(newServeCommand(opts), newSetupCommand(opts), newInstallCommand(opts), newDependenciesCommand(opts), newEndpointCommand(opts), newDoctorCommand(opts), newConfigCommand(opts), newAgentCommand(opts), newGitHubCommand(opts), newBasecampCommand(opts), newRailwayCommand(opts), newServiceCommand(opts))
 	return root
+}
+
+type dependencySpec struct {
+	Name       string
+	Executable string
+	Purpose    string
+}
+
+var dependencySpecs = []dependencySpec{
+	{Name: "git", Executable: "git", Purpose: "repository and worktree management"},
+	{Name: "gh", Executable: "gh", Purpose: "GitHub repositories, pull requests, and webhooks"},
+	{Name: "basecamp", Executable: "basecamp", Purpose: "Basecamp authentication and API access"},
+	{Name: "codex", Executable: "codex", Purpose: "Codex coding worker"},
+	{Name: "claude", Executable: "claude", Purpose: "Claude coding worker"},
+	{Name: "railway", Executable: "railway", Purpose: "Railway deployment and configuration"},
+	{Name: "tailscale", Executable: "tailscale", Purpose: "private networking and optional public ingress"},
+}
+
+func dependencyByName(name string) (dependencySpec, bool) {
+	for _, spec := range dependencySpecs {
+		if spec.Name == name {
+			return spec, true
+		}
+	}
+	return dependencySpec{}, false
+}
+
+func newInstallCommand(opts *cliOptions) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{Use: "install <dependency>...", Short: "Install dependency CLIs", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		names := args
+		if len(args) == 1 && args[0] == "all" {
+			names = make([]string, 0, len(dependencySpecs))
+			for _, spec := range dependencySpecs {
+				names = append(names, spec.Name)
+			}
+		}
+		results, err := installDependencies(opts, names, force)
+		if err != nil {
+			return err
+		}
+		return printDependencyResults(opts, results)
+	}}
+	cmd.Flags().BoolVar(&force, "force", false, "reinstall even when the executable is already available")
+	return cmd
+}
+
+func installDependencies(opts *cliOptions, names []string, force bool) ([]map[string]any, error) {
+	results := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		spec, ok := dependencyByName(strings.ToLower(name))
+		if !ok {
+			return nil, fmt.Errorf("unknown dependency %q (choose %s, or all)", name, strings.Join(dependencyNames(), ", "))
+		}
+		path, found := findExecutable(spec.Executable)
+		if found == nil && !force {
+			results = append(results, map[string]any{"dependency": spec.Name, "status": "already installed", "path": path})
+			continue
+		}
+		installer, installerArgs, err := dependencyInstallCommand(spec.Name)
+		if err != nil {
+			return nil, err
+		}
+		if err := runInteractive(opts, installer, installerArgs...); err != nil {
+			return nil, fmt.Errorf("install %s: %w", spec.Name, err)
+		}
+		status := "installed"
+		if opts.dryRun {
+			status = "would install"
+		}
+		results = append(results, map[string]any{"dependency": spec.Name, "status": status})
+	}
+	return results, nil
+}
+
+func dependencyNames() []string {
+	names := make([]string, 0, len(dependencySpecs))
+	for _, spec := range dependencySpecs {
+		names = append(names, spec.Name)
+	}
+	return names
+}
+
+// missingDependencies returns the named dependencies whose executables are not
+// on PATH.
+func missingDependencies(names []string) []string {
+	var missing []string
+	for _, name := range names {
+		spec, ok := dependencyByName(name)
+		if !ok {
+			missing = append(missing, name)
+			continue
+		}
+		if _, err := findExecutable(spec.Executable); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+func dependencyInstallCommand(name string) (string, []string, error) {
+	switch name {
+	case "basecamp":
+		return "go", []string{"install", "github.com/basecamp/basecamp-cli/cmd/basecamp@latest"}, nil
+	case "codex":
+		return "npm", []string{"install", "--global", "@openai/codex@latest"}, nil
+	case "claude":
+		return "sh", []string{"-c", "curl -fsSL https://claude.ai/install.sh | sh"}, nil
+	case "railway":
+		return "sh", []string{"-c", "curl -fsSL https://railway.com/install.sh | sh"}, nil
+	case "tailscale":
+		return "sh", []string{"-c", "curl -fsSL https://tailscale.com/install.sh | sh"}, nil
+	case "git", "gh":
+		if _, err := exec.LookPath("brew"); err == nil {
+			return "brew", []string{"install", name}, nil
+		}
+		if runtime.GOOS == "linux" {
+			if _, err := exec.LookPath("apt-get"); err == nil {
+				return "sudo", []string{"apt-get", "install", "-y", name}, nil
+			}
+			if _, err := exec.LookPath("dnf"); err == nil {
+				return "sudo", []string{"dnf", "install", "-y", name}, nil
+			}
+			if _, err := exec.LookPath("pacman"); err == nil {
+				return "sudo", []string{"pacman", "-S", "--needed", name}, nil
+			}
+		}
+	}
+	return "", nil, fmt.Errorf("no supported installer found for %s on %s", name, runtime.GOOS)
+}
+
+func newDependenciesCommand(opts *cliOptions) *cobra.Command {
+	cmd := &cobra.Command{Use: "dependencies", Aliases: []string{"deps"}, Short: "Inspect dependency CLIs"}
+	cmd.AddCommand(&cobra.Command{Use: "check", Short: "Check dependency CLI availability", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		results := make([]map[string]any, 0, len(dependencySpecs))
+		for _, spec := range dependencySpecs {
+			path, err := findExecutable(spec.Executable)
+			results = append(results, map[string]any{"dependency": spec.Name, "installed": err == nil, "path": path, "purpose": spec.Purpose})
+		}
+		return printDependencyResults(opts, results)
+	}})
+	return cmd
+}
+
+func printDependencyResults(opts *cliOptions, results []map[string]any) error {
+	if opts.jsonOutput {
+		return printValue(opts, results)
+	}
+	if _, err := fmt.Fprintln(opts.out, "Dependencies:"); err != nil {
+		return err
+	}
+	for _, result := range results {
+		name, _ := result["dependency"].(string)
+		status, _ := result["status"].(string)
+		if status == "" {
+			if installed, _ := result["installed"].(bool); installed {
+				status = "installed at " + fmt.Sprint(result["path"])
+			} else {
+				status = "missing"
+			}
+		}
+		if _, err := fmt.Fprintf(opts.out, "  %s: %s\n", name, status); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newServeCommand(opts *cliOptions) *cobra.Command {
@@ -90,14 +258,14 @@ func defaultConfigPath() string {
 	if err != nil {
 		return "config.json"
 	}
-	return filepath.Join(dir, "basecamp-webhook-agent", "config.json")
+	return filepath.Join(dir, "basecamp-agent", "config.json")
 }
 
 func defaultConfig() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		Listen: "127.0.0.1:8789", BasecampBin: "basecamp", CodexBin: "codex", ClaudeBin: "claude",
-		WorkDir: filepath.Join(home, "Projects"), StatePath: filepath.Join(home, ".local/state/basecamp-webhook-agent/state.json"),
+		WorkDir: filepath.Join(home, "Projects"), StatePath: filepath.Join(home, ".local/state/basecamp-agent/state.json"),
 		CommandTimeoutMins: 45, MaxOutputBytes: 12000,
 		BotIDs: map[string]int64{}, BotProfiles: map[string]string{}, ProjectRepos: map[string]string{},
 		Cards: CardsConfig{MoveEnabled: true, InProgress: "In progress", PROpen: "PR open", Done: "Done", Failed: "Figuring it out"},
@@ -499,7 +667,31 @@ func newConfigCommand(opts *cliOptions) *cobra.Command {
 		}
 		return writeConfig(opts.configPath, cfg, opts.dryRun, opts.out)
 	}}
-	cmd.AddCommand(initCmd, show, validate, set)
+	var forceSecret bool
+	secretGenerate := &cobra.Command{Use: "generate <ops-token>", Short: "Generate and store an operator dashboard token", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if args[0] != "ops-token" {
+			return errors.New("supported generated secret: ops-token")
+		}
+		cfg, err := readOrDefaultConfig(opts.configPath)
+		if err != nil {
+			return err
+		}
+		if cfg.Ops.Token != "" && !forceSecret {
+			return errors.New("ops token already exists (use --force to rotate it)")
+		}
+		cfg.Ops.Token, err = randomSecret(32)
+		if err != nil {
+			return err
+		}
+		if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
+			return err
+		}
+		return printValue(opts, map[string]any{"ok": true, "secret": "ops-token", "stored": true, "config": opts.configPath})
+	}}
+	secretGenerate.Flags().BoolVar(&forceSecret, "force", false, "rotate an existing token")
+	secret := &cobra.Command{Use: "secret", Short: "Manage locally stored secrets"}
+	secret.AddCommand(secretGenerate)
+	cmd.AddCommand(initCmd, show, validate, set, secret)
 	return cmd
 }
 
@@ -556,11 +748,20 @@ func newAgentCommand(opts *cliOptions) *cobra.Command {
 }
 
 func runInteractive(opts *cliOptions, name string, args ...string) error {
+	return runInteractiveInDir(opts, "", name, args...)
+}
+
+func runInteractiveInDir(opts *cliOptions, dir, name string, args ...string) error {
 	if opts.dryRun {
-		_, _ = fmt.Fprintf(opts.out, "+ %s %s\n", name, strings.Join(args, " "))
+		if dir != "" {
+			_, _ = fmt.Fprintf(opts.out, "+ (in %s) %s %s\n", dir, name, strings.Join(args, " "))
+		} else {
+			_, _ = fmt.Fprintf(opts.out, "+ %s %s\n", name, strings.Join(args, " "))
+		}
 		return nil
 	}
 	c := exec.Command(name, args...)
+	c.Dir = dir
 	c.Stdin, c.Stdout, c.Stderr = opts.in, opts.out, opts.errOut
 	return c.Run()
 }
@@ -595,26 +796,47 @@ func newGitHubCommand(opts *cliOptions) *cobra.Command {
 		if _, err := commandOutput("git", "-C", path, "rev-parse", "--show-toplevel"); err != nil {
 			return err
 		}
-		cfg, err := readOrDefaultConfig(opts.configPath)
-		if err != nil {
-			return err
-		}
-		for i, repo := range cfg.AllowedRepos {
-			if repo.Name == name || repo.Path == path {
-				cfg.AllowedRepos[i] = AllowedRepo{Name: name, Path: path, Aliases: aliases}
-				return writeConfig(opts.configPath, cfg, opts.dryRun, opts.out)
-			}
-		}
-		cfg.AllowedRepos = append(cfg.AllowedRepos, AllowedRepo{Name: name, Path: path, Aliases: aliases})
-		if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
-			return err
-		}
-		return printValue(opts, map[string]any{"ok": true, "repo": name, "path": path})
+		return addRepoConfig(opts, path, name, aliases)
 	}}
 	add.Flags().StringVar(&name, "name", "", "configured repository name")
 	add.Flags().StringSliceVar(&aliases, "alias", nil, "additional name used to select this repository")
+	var createName, owner, visibility string
+	var createAliases []string
+	var push bool
+	create := &cobra.Command{Use: "create <folder>", Short: "Create a GitHub repository and add it to the allowlist", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := filepath.Abs(expandPath(args[0]))
+		if err != nil {
+			return err
+		}
+		if createName == "" {
+			createName = filepath.Base(path)
+		}
+		slug := createName
+		if owner != "" {
+			slug = owner + "/" + createName
+		}
+		ghArgs := []string{"repo", "create", slug, "--source", path, "--remote", "origin", "--" + visibility}
+		if push {
+			ghArgs = append(ghArgs, "--push")
+		}
+		if err := runInteractive(opts, "gh", ghArgs...); err != nil {
+			return fmt.Errorf("create GitHub repository: %w", err)
+		}
+		return addRepoConfig(opts, path, createName, createAliases)
+	}}
+	create.Flags().StringVar(&createName, "name", "", "GitHub and configured repository name")
+	create.Flags().StringVar(&owner, "owner", "", "GitHub owner or organization")
+	create.Flags().StringVar(&visibility, "visibility", "private", "repository visibility: private, public, or internal")
+	create.Flags().StringSliceVar(&createAliases, "alias", nil, "additional name used to select this repository")
+	create.Flags().BoolVar(&push, "push", true, "push local commits after creating the repository")
+	create.PreRunE = func(cmd *cobra.Command, _ []string) error {
+		if visibility != "private" && visibility != "public" && visibility != "internal" {
+			return errors.New("--visibility must be private, public, or internal")
+		}
+		return nil
+	}
 	repos := &cobra.Command{Use: "repo", Short: "Manage local repositories"}
-	repos.AddCommand(add, &cobra.Command{Use: "list", Short: "List configured repositories", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	repos.AddCommand(add, create, &cobra.Command{Use: "list", Short: "List configured repositories", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := readOrDefaultConfig(opts.configPath)
 		if err != nil {
 			return err
@@ -644,6 +866,213 @@ func newGitHubCommand(opts *cliOptions) *cobra.Command {
 	webhooks.AddCommand(githubWebhookCommand(opts, false), githubWebhookCommand(opts, true))
 	cmd.AddCommand(webhooks)
 	return cmd
+}
+
+func addRepoConfig(opts *cliOptions, path, name string, aliases []string) error {
+	cfg, err := readOrDefaultConfig(opts.configPath)
+	if err != nil {
+		return err
+	}
+	for i, repo := range cfg.AllowedRepos {
+		if repo.Name == name || repo.Path == path {
+			cfg.AllowedRepos[i].Name = name
+			cfg.AllowedRepos[i].Path = path
+			cfg.AllowedRepos[i].Aliases = aliases
+			if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
+				return err
+			}
+			return printValue(opts, map[string]any{"ok": true, "repo": name, "path": path, "updated": true})
+		}
+	}
+	cfg.AllowedRepos = append(cfg.AllowedRepos, AllowedRepo{Name: name, Path: path, Aliases: aliases})
+	if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
+		return err
+	}
+	return printValue(opts, map[string]any{"ok": true, "repo": name, "path": path})
+}
+
+func newRailwayCommand(opts *cliOptions) *cobra.Command {
+	cmd := &cobra.Command{Use: "railway", Short: "Manage Railway through the Railway CLI"}
+	cmd.AddCommand(&cobra.Command{Use: "login", Short: "Authenticate or create a Railway account", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if opts.nonInteractive {
+			return errors.New("railway login requires an interactive terminal")
+		}
+		return runInteractive(opts, "railway", "login")
+	}})
+	var configureProject, configureService, configureEnvironment, configureDomain string
+	configure := &cobra.Command{Use: "configure [folder]", Short: "Store Railway context for a configured repository", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig(opts.configPath)
+		if err != nil {
+			return err
+		}
+		folder := ""
+		if len(args) == 1 {
+			folder = args[0]
+		}
+		repoIndex, _, err := resolveConfiguredRepo(cfg, folder)
+		if err != nil {
+			return err
+		}
+		repo := &cfg.AllowedRepos[repoIndex]
+		if configureProject != "" {
+			repo.Railway.Project = configureProject
+		}
+		if configureService != "" {
+			repo.Railway.Service = configureService
+		}
+		if configureEnvironment != "" {
+			repo.Railway.Environment = configureEnvironment
+		}
+		if configureDomain != "" {
+			repo.Railway.Domain = strings.TrimRight(configureDomain, "/")
+		}
+		if repo.Railway.Project == "" || repo.Railway.Service == "" || repo.Railway.Environment == "" {
+			return errors.New("Railway project, service, and environment are required (from flags or existing global config)")
+		}
+		if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
+			return err
+		}
+		return printValue(opts, map[string]any{"ok": true, "repo": repo.Name, "railway": repo.Railway})
+	}}
+	configure.Flags().StringVar(&configureProject, "project", "", "Railway project ID")
+	configure.Flags().StringVar(&configureService, "service", "", "Railway service name or ID")
+	configure.Flags().StringVar(&configureEnvironment, "environment", "", "Railway environment name or ID")
+	configure.Flags().StringVar(&configureDomain, "domain", "", "public Railway domain")
+	cmd.AddCommand(configure)
+	var newProject, yes, detach bool
+	var name, project, service, environment string
+	deploy := &cobra.Command{Use: "deploy [folder]", Short: "Deploy a repository with Railway CLI", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		folder := ""
+		if len(args) == 1 {
+			folder = args[0]
+		}
+		cfg, configErr := loadConfig(opts.configPath)
+		if configErr == nil {
+			_, repo, err := resolveConfiguredRepo(cfg, folder)
+			if err != nil && !newProject {
+				return err
+			}
+			if err == nil {
+				folder = repo.Path
+				if project == "" {
+					project = repo.Railway.Project
+				}
+				if service == "" {
+					service = repo.Railway.Service
+				}
+				if environment == "" {
+					environment = repo.Railway.Environment
+				}
+			}
+		} else if !errors.Is(configErr, os.ErrNotExist) {
+			return configErr
+		}
+		deployDir, err := filepath.Abs(expandPath(folder))
+		if err != nil {
+			return err
+		}
+		deployArgs := []string{"up"}
+		if newProject {
+			deployArgs = append(deployArgs, "--new")
+		}
+		if yes || opts.nonInteractive {
+			deployArgs = append(deployArgs, "--yes")
+		}
+		if detach {
+			deployArgs = append(deployArgs, "--detach")
+		}
+		if name != "" {
+			deployArgs = append(deployArgs, "--name", name)
+		}
+		if service != "" {
+			deployArgs = append(deployArgs, "--service", service)
+		}
+		if project != "" {
+			deployArgs = append(deployArgs, "--project", project)
+		}
+		if environment != "" {
+			deployArgs = append(deployArgs, "--environment", environment)
+		}
+		return runInteractiveInDir(opts, deployDir, "railway", deployArgs...)
+	}}
+	deploy.Flags().BoolVar(&newProject, "new", false, "create a new Railway project and service")
+	deploy.Flags().BoolVarP(&yes, "yes", "y", false, "accept defaults and skip surrounding prompts")
+	deploy.Flags().BoolVar(&detach, "detach", false, "return after starting the deployment")
+	deploy.Flags().StringVar(&name, "name", "", "name for a newly created Railway project")
+	deploy.Flags().StringVar(&project, "project", "", "Railway project ID")
+	deploy.Flags().StringVar(&service, "service", "", "Railway service")
+	deploy.Flags().StringVar(&environment, "environment", "", "Railway environment")
+	cmd.AddCommand(deploy)
+	var domainProject, domainService, domainEnvironment string
+	var domainPort int
+	domain := &cobra.Command{Use: "domain [domain]", Short: "Create a Railway-provided or custom public domain", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		domainArgs := []string{"domain"}
+		if len(args) == 1 {
+			domainArgs = append(domainArgs, args[0])
+		}
+		if domainPort != 0 {
+			domainArgs = append(domainArgs, "--port", strconv.Itoa(domainPort))
+		}
+		if domainService != "" {
+			domainArgs = append(domainArgs, "--service", domainService)
+		}
+		if domainEnvironment != "" {
+			domainArgs = append(domainArgs, "--environment", domainEnvironment)
+		}
+		if domainProject != "" {
+			domainArgs = append(domainArgs, "--project", domainProject)
+		}
+		if opts.jsonOutput {
+			domainArgs = append(domainArgs, "--json")
+		}
+		return runInteractive(opts, "railway", domainArgs...)
+	}}
+	domain.Flags().IntVar(&domainPort, "port", 0, "service port to expose")
+	domain.Flags().StringVar(&domainService, "service", "", "Railway service name or ID")
+	domain.Flags().StringVar(&domainEnvironment, "environment", "", "Railway environment name or ID")
+	domain.Flags().StringVar(&domainProject, "project", "", "Railway project ID")
+	cmd.AddCommand(domain)
+	cmd.AddCommand(&cobra.Command{Use: "status", Short: "Show the linked Railway context", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		args := []string{"status"}
+		if opts.jsonOutput {
+			args = append(args, "--json")
+		}
+		return runInteractive(opts, "railway", args...)
+	}})
+	return cmd
+}
+
+func resolveConfiguredRepo(cfg Config, folder string) (int, AllowedRepo, error) {
+	if folder == "" {
+		var err error
+		folder, err = os.Getwd()
+		if err != nil {
+			return -1, AllowedRepo{}, err
+		}
+	}
+	abs, err := filepath.Abs(expandPath(folder))
+	if err != nil {
+		return -1, AllowedRepo{}, err
+	}
+	best := -1
+	bestLength := -1
+	for i, repo := range cfg.AllowedRepos {
+		root, err := filepath.Abs(expandPath(repo.Path))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > bestLength {
+			best, bestLength = i, len(root)
+		}
+	}
+	if best < 0 {
+		return -1, AllowedRepo{}, fmt.Errorf("no globally configured repository matches %s", abs)
+	}
+	return best, cfg.AllowedRepos[best], nil
 }
 
 func githubWebhookCommand(opts *cliOptions, remove bool) *cobra.Command {
@@ -963,6 +1392,16 @@ func newDoctorCommand(opts *cliOptions) *cobra.Command {
 			configErr = validateConfig(cfg)
 			checks["configuration"] = map[string]any{"ok": configErr == nil, "error": errorString(configErr)}
 		}
+		if configErr == nil {
+			var urlErr error
+			if cfg.PublicURL == "" {
+				urlErr = errors.New("not configured; Basecamp cannot deliver webhooks until `basecamp-agent endpoint set <https-url>` is run")
+			} else {
+				urlErr = checkEndpointHealth(cfg.PublicURL)
+			}
+			checks["public_url"] = map[string]any{"ok": urlErr == nil, "url": cfg.PublicURL, "error": errorString(urlErr)}
+			failed = failed || urlErr != nil
+		}
 		failed = failed || configErr != nil
 		_ = printChecks(opts, checks)
 		if failed {
@@ -983,26 +1422,14 @@ func newServiceCommand(opts *cliOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "service", Short: "Manage the systemd user service"}
 	serviceAction := func(action string) *cobra.Command {
 		return &cobra.Command{Use: action, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			return runInteractive(opts, "systemctl", "--user", action, "basecamp-webhook-agent.service")
+			return runInteractive(opts, "systemctl", "--user", action, "basecamp-agent.service")
 		}}
 	}
 	install := &cobra.Command{Use: "install", Short: "Install and enable the systemd user service", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return installSystemdService(opts)
 	}}
 	uninstall := &cobra.Command{Use: "uninstall", Short: "Disable and remove the systemd user service", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if err := runInteractive(opts, "systemctl", "--user", "disable", "--now", "basecamp-webhook-agent.service"); err != nil && !opts.dryRun {
-			return err
-		}
-		home, _ := os.UserHomeDir()
-		path := filepath.Join(home, ".config/systemd/user/basecamp-webhook-agent.service")
-		if opts.dryRun {
-			_, _ = fmt.Fprintf(opts.out, "remove %s\n", path)
-			return nil
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return runInteractive(opts, "systemctl", "--user", "daemon-reload")
+		return removeUserUnit(opts, "basecamp-agent.service")
 	}}
 	cmd.AddCommand(install, uninstall, serviceAction("start"), serviceAction("stop"), serviceAction("restart"), serviceAction("status"))
 	return cmd
@@ -1013,13 +1440,18 @@ func installSystemdService(opts *cliOptions) error {
 	if err != nil {
 		return err
 	}
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".config/systemd/user/basecamp-webhook-agent.service")
 	body := fmt.Sprintf("[Unit]\nDescription=Basecamp webhook local coding agent dispatcher\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=%s serve --config %s\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n", strconv.Quote(exe), strconv.Quote(opts.configPath))
+	return installUserUnit(opts, "basecamp-agent.service", body)
+}
+
+// installUserUnit writes a systemd user unit, then enables and (re)starts it.
+func installUserUnit(opts *cliOptions, name, body string) error {
 	if opts.dryRun {
-		_, err = fmt.Fprint(opts.out, body)
+		_, err := fmt.Fprint(opts.out, body)
 		return err
 	}
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".config/systemd/user", name)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -1029,23 +1461,41 @@ func installSystemdService(opts *cliOptions) error {
 	if err := runInteractive(opts, "systemctl", "--user", "daemon-reload"); err != nil {
 		return err
 	}
-	return runInteractive(opts, "systemctl", "--user", "enable", "--now", "basecamp-webhook-agent.service")
+	if err := runInteractive(opts, "systemctl", "--user", "enable", name); err != nil {
+		return err
+	}
+	return runInteractive(opts, "systemctl", "--user", "restart", name)
+}
+
+// removeUserUnit disables, stops, and deletes a systemd user unit.
+func removeUserUnit(opts *cliOptions, name string) error {
+	if err := runInteractive(opts, "systemctl", "--user", "disable", "--now", name); err != nil && !opts.dryRun {
+		return err
+	}
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".config/systemd/user", name)
+	if opts.dryRun {
+		_, _ = fmt.Fprintf(opts.out, "remove %s\n", path)
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return runInteractive(opts, "systemctl", "--user", "daemon-reload")
 }
 
 func newSetupCommand(opts *cliOptions) *cobra.Command {
-	return &cobra.Command{Use: "setup", Short: "Interactively configure the agent from reusable setup operations", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if opts.nonInteractive {
-			return errors.New("setup is interactive; use the individual commands with --non-interactive")
+	var setup setupOptions
+	cmd := &cobra.Command{Use: "setup", Short: "Configure the agent interactively or from composable options", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if opts.nonInteractive || setup.repo != "" || setup.project != 0 || setup.account != 0 {
+			return runConfiguredSetup(opts, setup)
 		}
 		cfg, err := readOrDefaultConfig(opts.configPath)
 		if err != nil {
 			return err
 		}
 		reader := bufio.NewReader(opts.in)
-		fmt.Fprintln(opts.out, "Basecamp webhook agent setup (press Enter to keep a displayed value)")
-		if cfg.PublicURL, err = prompt(reader, opts.out, "Public base URL (for example https://agent.example.com)", cfg.PublicURL); err != nil {
-			return err
-		}
+		fmt.Fprintln(opts.out, "Basecamp agent setup (press Enter to keep a displayed value)")
 		if cfg.AllowedAccountID, err = promptInt64(reader, opts.out, "Basecamp account ID", cfg.AllowedAccountID); err != nil {
 			return err
 		}
@@ -1135,38 +1585,6 @@ func newSetupCommand(opts *cliOptions) *cobra.Command {
 			}
 		}
 
-		if cfg.PublicURL != "" {
-			syncNow, err := promptBool(reader, opts.out, "Create or update Basecamp and GitHub webhooks now", true)
-			if err != nil {
-				return err
-			}
-			if syncNow {
-				basecampURL := strings.TrimRight(cfg.PublicURL, "/") + "/webhook"
-				profile := cfg.BotProfiles["codex"]
-				if profile == "" {
-					for _, candidate := range cfg.BotProfiles {
-						profile = candidate
-						break
-					}
-				}
-				for _, id := range cfg.AllowedProjectIDs {
-					if err := reconcileBasecampWebhook(opts, cfg.BasecampBin, profile, id, basecampURL, false); err != nil {
-						return err
-					}
-				}
-				githubURL := strings.TrimRight(cfg.PublicURL, "/") + "/github/webhook"
-				for _, repo := range cfg.AllowedRepos {
-					slug, err := githubSlug(repo.Path)
-					if err != nil {
-						return err
-					}
-					if _, err := reconcileGitHubWebhook(opts, slug, githubURL, cfg.GitHub.WebhookSecret, false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
 		installNow, err := promptBool(reader, opts.out, "Install and start the systemd user service", true)
 		if err != nil {
 			return err
@@ -1176,9 +1594,131 @@ func newSetupCommand(opts *cliOptions) *cobra.Command {
 				return err
 			}
 		}
-		fmt.Fprintln(opts.out, "Setup complete. Run `basecamp-webhook-agent doctor` at any time to verify it.")
+		if err := promptPublicURL(cmd.Context(), opts, reader); err != nil {
+			return err
+		}
+		fmt.Fprintln(opts.out, "Setup complete. Run `basecamp-agent doctor` at any time to verify it.")
 		return nil
 	}}
+	flags := cmd.Flags()
+	flags.StringVar(&setup.repo, "repo", "", "local repository folder")
+	flags.StringVar(&setup.repoName, "repo-name", "", "configured repository name")
+	flags.StringSliceVar(&setup.repoAliases, "repo-alias", nil, "additional repository selection name")
+	flags.StringVar(&setup.publicURL, "public-url", "", "public HTTPS URL that forwards to this agent")
+	flags.Int64Var(&setup.account, "account", 0, "Basecamp account ID")
+	flags.Int64Var(&setup.project, "project", 0, "Basecamp project ID")
+	flags.Int64Var(&setup.creator, "creator", 0, "trusted requester person ID")
+	flags.Int64Var(&setup.codexPersonID, "codex-person-id", 0, "Codex bot Basecamp person ID")
+	flags.StringVar(&setup.codexProfile, "codex-profile", "codex-bot", "Codex bot Basecamp CLI profile")
+	flags.Int64Var(&setup.claudePersonID, "claude-person-id", 0, "Claude bot Basecamp person ID")
+	flags.StringVar(&setup.claudeProfile, "claude-profile", "claude-bot", "Claude bot Basecamp CLI profile")
+	flags.BoolVar(&setup.syncWebhooks, "sync-webhooks", false, "create or update webhooks for the current public_url")
+	flags.BoolVar(&setup.installService, "install-service", false, "install and start the systemd user service")
+	return cmd
+}
+
+type setupOptions struct {
+	repo, repoName, publicURL, codexProfile, claudeProfile string
+	repoAliases                                            []string
+	account, project, creator                              int64
+	codexPersonID, claudePersonID                          int64
+	syncWebhooks, installService                           bool
+}
+
+func runConfiguredSetup(opts *cliOptions, setup setupOptions) error {
+	cfg, err := readOrDefaultConfig(opts.configPath)
+	if err != nil {
+		return err
+	}
+	if setup.publicURL != "" {
+		if err := validPublicURL(setup.publicURL); err != nil {
+			return err
+		}
+	}
+	if cfg.BotIDs == nil {
+		cfg.BotIDs = map[string]int64{}
+	}
+	if cfg.BotProfiles == nil {
+		cfg.BotProfiles = map[string]string{}
+	}
+	if cfg.ProjectRepos == nil {
+		cfg.ProjectRepos = map[string]string{}
+	}
+	if setup.account != 0 {
+		cfg.AllowedAccountID = setup.account
+	}
+	if setup.project != 0 {
+		cfg.AllowedProjectIDs = appendUniqueInt64(cfg.AllowedProjectIDs, setup.project)
+	}
+	if setup.creator != 0 {
+		cfg.AllowedCreatorIDs = appendUniqueInt64(cfg.AllowedCreatorIDs, setup.creator)
+	}
+	if setup.codexPersonID != 0 {
+		cfg.BotIDs["codex"] = setup.codexPersonID
+		cfg.BotProfiles["codex"] = setup.codexProfile
+	}
+	if setup.claudePersonID != 0 {
+		cfg.BotIDs["claude"] = setup.claudePersonID
+		cfg.BotProfiles["claude"] = setup.claudeProfile
+	}
+	if setup.repo != "" {
+		path, err := filepath.Abs(expandPath(setup.repo))
+		if err != nil {
+			return err
+		}
+		if _, err := commandOutput("git", "-C", path, "rev-parse", "--show-toplevel"); err != nil {
+			return err
+		}
+		if setup.repoName == "" {
+			setup.repoName = filepath.Base(path)
+		}
+		updated := false
+		for i, repo := range cfg.AllowedRepos {
+			if repo.Name == setup.repoName || repo.Path == path {
+				cfg.AllowedRepos[i].Name = setup.repoName
+				cfg.AllowedRepos[i].Path = path
+				cfg.AllowedRepos[i].Aliases = setup.repoAliases
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			cfg.AllowedRepos = append(cfg.AllowedRepos, AllowedRepo{Name: setup.repoName, Path: path, Aliases: setup.repoAliases})
+		}
+		if setup.project != 0 {
+			cfg.ProjectRepos[strconv.FormatInt(setup.project, 10)] = setup.repoName
+		}
+	}
+	if setup.syncWebhooks && setup.publicURL == "" && cfg.PublicURL == "" {
+		return errors.New("--public-url or an existing public_url is required with --sync-webhooks")
+	}
+	if setup.syncWebhooks && cfg.GitHub.WebhookSecret == "" {
+		cfg.GitHub.WebhookSecret, err = randomSecret(32)
+		if err != nil {
+			return err
+		}
+	}
+	if err := validateConfig(cfg); err != nil {
+		return fmt.Errorf("setup configuration: %w", err)
+	}
+	if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
+		return err
+	}
+	if setup.installService {
+		if err := installSystemdService(opts); err != nil {
+			return err
+		}
+	}
+	if setup.publicURL != "" {
+		if err := switchPublicURL(context.Background(), opts, cfg, setup.publicURL, setup.syncWebhooks); err != nil {
+			return err
+		}
+	} else if setup.syncWebhooks {
+		if err := syncPublicWebhooks(opts, cfg, cfg.PublicURL, false); err != nil {
+			return err
+		}
+	}
+	return printValue(opts, map[string]any{"ok": true, "config": opts.configPath, "repo": setup.repoName})
 }
 
 func ensureBasecampProfile(opts *cliOptions, bin, profile string) error {
@@ -1248,4 +1788,19 @@ func promptBool(reader *bufio.Reader, out io.Writer, label string, defaultValue 
 	default:
 		return false, fmt.Errorf("answer %q with yes or no", value)
 	}
+}
+
+// findExecutable looks on PATH and then in ~/.local/bin, where several
+// dependency installers write and which is often missing from PATH right after
+// an install.
+func findExecutable(name string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".local/bin", name)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		return path, nil
+	}
+	return "", fmt.Errorf("%s not found; run `basecamp-agent install %s`", name, name)
 }

@@ -65,9 +65,19 @@ type OpsConfig struct {
 }
 
 type AllowedRepo struct {
-	Name    string   `json:"name"`
-	Path    string   `json:"path"`
-	Aliases []string `json:"aliases"`
+	Name     string            `json:"name"`
+	Path     string            `json:"path"`
+	Aliases  []string          `json:"aliases"`
+	Railway  RailwayRepoConfig `json:"railway,omitempty"`
+	GitHub   string            `json:"github_repository,omitempty"`
+	Basecamp int64             `json:"basecamp_project_id,omitempty"`
+}
+
+type RailwayRepoConfig struct {
+	Project     string `json:"project,omitempty"`
+	Service     string `json:"service,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	Domain      string `json:"domain,omitempty"`
 }
 
 type AllowedRepoList []AllowedRepo
@@ -171,7 +181,7 @@ func runServer(configPath string, replayChatEvent, replayAssignment int64) error
 		return fmt.Errorf("config: %w", err)
 	}
 	if cfg.Listen == "" {
-		cfg.Listen = "100.86.108.78:8789"
+		cfg.Listen = "127.0.0.1:8789"
 	}
 	if cfg.BasecampBin == "" {
 		cfg.BasecampBin = "basecamp"
@@ -186,7 +196,7 @@ func runServer(configPath string, replayChatEvent, replayAssignment int64) error
 		cfg.WorkDir = os.ExpandEnv("$HOME/Projects")
 	}
 	if cfg.StatePath == "" {
-		cfg.StatePath = os.ExpandEnv("$HOME/.local/state/basecamp-webhook-agent/state.json")
+		cfg.StatePath = os.ExpandEnv("$HOME/.local/state/basecamp-agent/state.json")
 	}
 	if cfg.CommandTimeoutMins == 0 {
 		cfg.CommandTimeoutMins = 45
@@ -235,14 +245,18 @@ func runServer(configPath string, replayChatEvent, replayAssignment int64) error
 	go s.worker()
 	go s.pollChat()
 
+	log.Printf("listening on %s", cfg.Listen)
+	return http.ListenAndServe(cfg.Listen, s.routes())
+}
+
+func (s *Server) routes() *http.ServeMux {
 	h := http.NewServeMux()
-	h.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok\n") })
+	// The root answers so a public URL can be checked end to end.
+	h.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok\n") })
 	h.HandleFunc("/webhook", s.handleWebhook)
 	h.HandleFunc("/github/webhook", s.handleGitHubWebhook)
 	s.registerOpsRoutes(h)
-
-	log.Printf("listening on %s", cfg.Listen)
-	return http.ListenAndServe(cfg.Listen, h)
+	return h
 }
 
 func loadConfig(path string) (Config, error) {
