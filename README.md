@@ -42,8 +42,7 @@ basecamp-webhook-agent serve
 
 # Add another repository or project
 basecamp-webhook-agent github repo add ~/Projects/my-app
-basecamp-webhook-agent basecamp project add \
-  --account 123 --project 456 --creator 789 --default-repo my-app
+basecamp-webhook-agent basecamp project add --account 123 --project 456 --creator 789 --default-repo my-app
 
 # Reconcile webhooks after changing configuration
 basecamp-webhook-agent basecamp webhook sync
