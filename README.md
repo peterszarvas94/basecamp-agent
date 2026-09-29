@@ -65,4 +65,4 @@ For architecture, development workflows, tests, and operational details, see
 [AGENTS.md](AGENTS.md).
 
 Released under the [MIT License](LICENSE). Vendored dependency notices are in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+the [`licenses`](licenses) directory.
