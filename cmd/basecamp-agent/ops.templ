@@ -1,0 +1,302 @@
+package main
+
+import "strconv"
+
+// opsPageView is what the jobs dashboard page shows.
+type opsPageView struct {
+	Title       string
+	Project     int64
+	BasecampURL string
+	StreamURL   string
+	Menu        []projectMenuItem
+}
+
+type projectMenuItem struct {
+	Href    string
+	Label   string
+	ID      string
+	Active  bool
+	Jobs    int
+	Running int
+}
+
+// jobsView is the live-patched jobs section of a dashboard page.
+type jobsView struct {
+	Project   int64
+	Jobs      []JobStatus
+	Active    int
+	Completed int
+	Attention int
+}
+
+// jobDetailView is the live-patched body of a job page. The job output is
+// sent separately, as the output signal.
+type jobDetailView struct {
+	Found  bool
+	Status JobStatus
+}
+
+const logPanelClass = "max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-box bg-base-200 p-4 font-mono text-sm"
+
+templ layout(title, streamURL string) {
+	<!DOCTYPE html>
+	<html data-theme="night">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css"/>
+			<link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css"/>
+			<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+		</head>
+		<body data-init={ datastarGet(streamURL) } class="min-h-screen bg-base-200 text-base-content">
+			<main class="mx-auto max-w-[1400px] p-3 md:p-6">
+				{ children... }
+			</main>
+			<script type="module" src="/ops/datastar.js"></script>
+		</body>
+	</html>
+}
+
+templ opsIndexPage(v opsPageView) {
+	@layout(v.Title, v.StreamURL) {
+		<header class="mb-5 flex flex-wrap items-center justify-between gap-3">
+			<div>
+				<h1 class="text-2xl font-bold tracking-tight md:text-3xl">{ v.Title }</h1>
+				if v.Project == 0 {
+					<p class="mt-1 text-sm text-neutral-content">Jobs from every configured Basecamp project</p>
+				} else {
+					<p class="mt-1 text-sm text-neutral-content">
+						Basecamp project <span class="font-mono">{ strconv.FormatInt(v.Project, 10) }</span> ·
+						<a class="link link-hover" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(v.BasecampURL) }>Open in Basecamp ↗</a>
+					</p>
+				}
+			</div>
+			<span class="badge badge-info badge-outline gap-2"><span class="status status-info animate-pulse"></span>live</span>
+		</header>
+		@projectMenu(v.Menu)
+		<section id="jobs"><div class="skeleton h-32 w-full rounded-box"></div></section>
+	}
+}
+
+templ jobPage(id, back, streamURL string) {
+	@layout(id, streamURL) {
+		<a class="btn btn-ghost btn-sm mb-4" href={ templ.SafeURL(back) }>← jobs</a>
+		// Signals live outside #job-detail so live patches never reset them. The
+		// stream sends the job output as the output signal.
+		<div data-signals="{output: '', following: true, copied: false}">
+			<section id="job-detail"><div class="skeleton h-64 w-full"></div></section>
+		</div>
+	}
+}
+
+templ projectMenu(items []projectMenuItem) {
+	if len(items) > 0 {
+		<ul class="menu menu-sm mb-5 w-fit p-0">
+			for _, item := range items {
+				<li>
+					<a class={ templ.KV("menu-active", item.Active) } href={ templ.SafeURL(item.Href) }>
+						{ item.Label }
+						if item.ID != "" {
+							<code class="text-xs text-neutral-content">#{ item.ID }</code>
+						}
+						<span class="badge badge-sm badge-ghost">{ plural(item.Jobs, "job") }</span>
+						if item.Running > 0 {
+							<span class="badge badge-sm badge-info">{ strconv.Itoa(item.Running) } running</span>
+						}
+					</a>
+				</li>
+			}
+		</ul>
+	}
+}
+
+templ statTile(title, value, valueClass, desc string) {
+	<div class="stat rounded-box border border-base-300 bg-base-100 shadow">
+		<div class="stat-title">{ title }</div>
+		<div class={ "stat-value", valueClass }>{ value }</div>
+		if desc != "" {
+			<div class="stat-desc">{ desc }</div>
+		}
+	</div>
+}
+
+templ stateBadge(state string) {
+	<span class={ "badge", "gap-1", stateBadgeClass(state) }>
+		<span class={ "status", statusDotClass(state) }></span>
+		{ stateLabel(state) }
+	</span>
+}
+
+templ jobsSection(v jobsView) {
+	<section id="jobs" class="space-y-5">
+		<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+			@statTile("Total jobs", strconv.Itoa(len(v.Jobs)), "", "retained runs")
+			@statTile("Active", strconv.Itoa(v.Active), "text-info", "preparing / running")
+			@statTile("Completed", strconv.Itoa(v.Completed), "text-success", "PRs and clean exits")
+			@statTile("Needs attention", strconv.Itoa(v.Attention), "text-warning", "failed or stopped")
+		</div>
+		if len(v.Jobs) == 0 {
+			<div class="card border border-dashed border-base-300 bg-base-100 shadow">
+				<div class="card-body items-center py-16 text-center">
+					<div class="text-5xl">☕</div>
+					<h2 class="card-title">No agent jobs yet</h2>
+					<p class="max-w-lg text-neutral-content">When an allowed Basecamp event asks an agent to work, the run will appear here with live logs and actions.</p>
+				</div>
+			</div>
+		} else {
+			<section class="card border border-base-300 bg-base-100 shadow-xl">
+				<div class="card-body p-0">
+					<div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
+						<h2 class="font-semibold">Recent runs</h2>
+						<span class="badge badge-info badge-outline"><span class="status status-info"></span> streaming</span>
+					</div>
+					<div class="overflow-x-auto">
+						<table class="table table-zebra">
+							<thead>
+								<tr>
+									<th>State</th>
+									<th>Job</th>
+									<th class="hidden md:table-cell">Repo</th>
+									<th class="hidden lg:table-cell">Started</th>
+									<th class="hidden lg:table-cell">Finished</th>
+									<th>Links</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, st := range v.Jobs {
+									@jobRow(st, v.Project)
+								}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</section>
+		}
+	</section>
+}
+
+templ jobRow(st JobStatus, project int64) {
+	<tr>
+		<td>
+			@stateBadge(st.State)
+		</td>
+		<td>
+			<a class="link link-primary font-mono font-semibold" href={ templ.SafeURL("/ops/jobs/" + st.ID) }>{ st.ID }</a>
+			<br/>
+			<span class="text-xs text-neutral-content">{ st.Agent } · event { strconv.FormatInt(st.EventID, 10) } · attempt { strconv.Itoa(st.Attempt) }</span>
+			// Narrow screens hide the columns below; fold their content in here so
+			// nothing is lost.
+			<span class="mt-1 block text-xs text-neutral-content md:hidden">{ emptyDash(st.Repo) } · <span class="font-mono">{ emptyDash(st.Branch) }</span></span>
+			<span class="mt-0.5 block text-xs text-neutral-content lg:hidden">{ st.StartedAt } → { emptyDash(st.EndedAt) }</span>
+		</td>
+		<td class="hidden md:table-cell">
+			<span class="font-medium">{ emptyDash(st.Repo) }</span>
+			<br/>
+			<span class="text-xs text-neutral-content font-mono">{ emptyDash(st.Branch) }</span>
+		</td>
+		<td class="hidden lg:table-cell"><span class="text-xs whitespace-nowrap">{ st.StartedAt }</span></td>
+		<td class="hidden lg:table-cell"><span class="text-xs whitespace-nowrap">{ emptyDash(st.EndedAt) }</span></td>
+		<td>
+			<div class="join join-vertical sm:join-horizontal">
+				if st.Target != "" {
+					<a class="btn join-item btn-xs btn-outline" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(basecampAppURL(st.Target)) }>Basecamp</a>
+				}
+				if st.PRURL != "" {
+					<a class="btn join-item btn-xs btn-primary" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(st.PRURL) }>PR</a>
+				}
+				if st.State == "failed" || st.State == "stopped" {
+					<button class="btn join-item btn-xs btn-warning" data-on:click={ datastarPost(jobActionURL(st.ID, "restart", project, false)) }>Restart</button>
+				}
+				if isCancellableJobState(st.State) {
+					<button class="btn join-item btn-xs btn-outline btn-error" data-on:click={ datastarPost(jobActionURL(st.ID, "cancel", project, false)) }>Cancel</button>
+				}
+			</div>
+		</td>
+	</tr>
+}
+
+templ jobDetail(v jobDetailView) {
+	<section id="job-detail" class="space-y-5">
+		if !v.Found {
+			<div role="alert" class="alert alert-warning">Job not found.</div>
+		} else {
+			<div class="card border border-base-300 bg-base-100 shadow-xl">
+				<div class="card-body">
+					<div class="flex flex-wrap items-start justify-between gap-3">
+						<div>
+							<div class="badge badge-ghost mb-2 uppercase tracking-widest">{ v.Status.Agent } agent</div>
+							<h1 class="card-title font-mono break-all text-xl md:text-2xl">{ v.Status.ID }</h1>
+							<p class="text-sm text-neutral-content">event { strconv.FormatInt(v.Status.EventID, 10) } · attempt { strconv.Itoa(v.Status.Attempt) } · pgid { strconv.Itoa(v.Status.PGID) }</p>
+						</div>
+						@stateBadge(v.Status.State)
+					</div>
+					<div class="card-actions mt-4">
+						if isActiveJobState(v.Status.State) {
+							<button class="btn btn-error btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "stop", 0, true)) }>Stop job</button>
+						} else if v.Status.State == "failed" || v.Status.State == "stopped" {
+							<button class="btn btn-warning btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "restart", 0, true)) }>Restart as fresh attempt</button>
+						}
+						if isCancellableJobState(v.Status.State) {
+							<button class="btn btn-outline btn-error btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "cancel", 0, true)) }>Cancel</button>
+						}
+						if v.Status.Target != "" {
+							<a class="btn btn-outline btn-sm" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(basecampAppURL(v.Status.Target)) }>Basecamp trigger</a>
+						}
+						if v.Status.PRURL != "" {
+							<a class="btn btn-primary btn-sm" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(v.Status.PRURL) }>PR</a>
+						}
+					</div>
+				</div>
+			</div>
+			<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+				@statTile("Started", emptyDash(v.Status.StartedAt), "text-sm", "")
+				@statTile("Finished", emptyDash(v.Status.EndedAt), "text-sm", "")
+				@statTile("Repo", emptyDash(v.Status.Repo), "text-sm font-mono", "")
+				@statTile("Base", emptyDash(v.Status.Base), "text-sm font-mono", "")
+			</div>
+			<div class="card border border-base-300 bg-base-100 shadow">
+				<div class="card-body">
+					<dl class="grid gap-4 md:grid-cols-2">
+						<div>
+							<dt class="text-xs uppercase tracking-wide text-neutral-content">Branch</dt>
+							<dd class="font-mono break-all">{ emptyDash(v.Status.Branch) }</dd>
+						</div>
+						<div>
+							<dt class="text-xs uppercase tracking-wide text-neutral-content">Worktree</dt>
+							<dd class="font-mono text-xs break-all">{ emptyDash(v.Status.Worktree) }</dd>
+						</div>
+					</dl>
+				</div>
+			</div>
+			<section class="card border border-base-300 bg-base-100 shadow">
+				<div class="card-body">
+					<div class="flex items-center justify-between gap-3">
+						<h2 class="card-title">Output</h2>
+						<button
+							type="button"
+							class="btn btn-ghost btn-xs"
+							data-on:click="navigator.clipboard.writeText($output); $copied = true; setTimeout(() => $copied = false, 1200)"
+							data-text="$copied ? 'Copied' : 'Copy'"
+						>Copy</button>
+					</div>
+					<pre
+						id="job-output"
+						class={ logPanelClass }
+						data-text="$output"
+						data-on:scroll="$following = el.scrollHeight - el.scrollTop - el.clientHeight < 32"
+						data-effect="$output; $following && el.scrollTo(0, el.scrollHeight)"
+					></pre>
+				</div>
+			</section>
+			if v.Status.Message != "" {
+				<section class="card border border-base-300 bg-base-100 shadow">
+					<div class="card-body">
+						<h2 class="card-title">Final message</h2>
+						<pre class={ logPanelClass }>{ v.Status.Message }</pre>
+					</div>
+				</section>
+			}
+		}
+	</section>
+}

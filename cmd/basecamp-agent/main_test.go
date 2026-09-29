@@ -239,7 +239,7 @@ func TestFailedAndStoppedJobsCanBeCancelled(t *testing.T) {
 }
 
 func TestJobStatesUseColorInsteadOfRowOpacity(t *testing.T) {
-	if strings.Contains(detailCSS(), "opacity") {
+	if strings.Contains(renderFragment(jobsSection(jobsView{Jobs: []JobStatus{{ID: "a", State: "cancelled"}}})), "opacity") {
 		t.Error("job rows must not be dimmed for any state")
 	}
 	want := map[string]string{
@@ -259,20 +259,20 @@ func TestJobStatesUseColorInsteadOfRowOpacity(t *testing.T) {
 	}
 }
 
-func TestOutputPanelScriptSupportsFollowAndCopy(t *testing.T) {
-	js := outputPanelJS()
-	for _, required := range []string{"nearBottom", "following", "scrollToBottom", "navigator.clipboard.writeText", "copyJobOutput"} {
-		if !strings.Contains(js, required) {
-			t.Errorf("output panel script is missing %q", required)
+func TestOutputPanelFollowsAndCopiesWithSignals(t *testing.T) {
+	html := renderFragment(jobDetail(jobDetailView{Found: true, Status: JobStatus{ID: "a", State: "running"}}))
+	for _, required := range []string{`data-text="$output"`, "data-on:scroll=", "$following = el.scrollHeight", "data-effect=", "navigator.clipboard.writeText($output)", "$copied"} {
+		if !strings.Contains(html, required) {
+			t.Errorf("output panel is missing %q", required)
 		}
 	}
 }
 
 func TestNeutralBadgesAreSolidSoTheyStayReadable(t *testing.T) {
-	if got := badgeStyle("badge-neutral"); got != "badge-neutral" {
+	if got := stateBadgeClass("cancelled"); got != "badge-neutral" {
 		t.Errorf("neutral badge = %q, want solid", got)
 	}
-	if got := badgeStyle("badge-success"); got != "badge-success badge-outline" {
+	if got := stateBadgeClass("completed"); got != "badge-success badge-outline" {
 		t.Errorf("success badge = %q, want outlined", got)
 	}
 }

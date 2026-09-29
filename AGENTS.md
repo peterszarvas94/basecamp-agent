@@ -16,7 +16,16 @@ Claude CLIs. Its main pieces are:
 - `chat.go`: Campfire event-feed polling and replay.
 - `worktree.go`: repository selection, worktrees, branch publishing, and PRs.
 - `github.go`: signed GitHub PR webhooks and Basecamp card transitions.
-- `ops.go`: job persistence, recovery, retry/stop actions, and operator UI.
+- `ops.go`: job persistence, recovery, retry/stop actions, and operator UI
+  handlers.
+- `ops.templ`: the dashboard's templ components. All dashboard markup lives
+  here; Go code only builds view data and never builds HTML with strings.
+  Style with DaisyUI components and theme colors, and put behavior in Datastar
+  attributes and signals (the job output is the `output` signal). Do not add
+  custom CSS or JS files: `static/` holds only `datastar.js`. If a script is
+  ever unavoidable, make it an ES module with an import map, never an IIFE.
+  Regenerate `ops_templ.go` with `go tool templ generate` and commit it, so
+  `go install` works without templ; never edit it by hand.
 - `endpoint.go`: the public URL, its health check, and moving Basecamp and
   GitHub webhooks when it changes.
 
@@ -134,6 +143,8 @@ Security invariants:
 Use Go 1.24 or newer. Run:
 
 ```sh
+go tool templ generate -path cmd/basecamp-agent
+go tool templ fmt cmd/basecamp-agent
 gofmt -w cmd/basecamp-agent/*.go
 go test -race ./...
 go vet ./...

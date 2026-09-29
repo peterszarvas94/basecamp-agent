@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -178,5 +179,73 @@ func writeTestStatus(t *testing.T, s *Server, st JobStatus) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "status.json"), b, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The dashboard's markup lives in templ components; Go code only prepares
+// view data.
+func TestOpsGoCodeBuildsNoHTML(t *testing.T) {
+	src, err := os.ReadFile("ops.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []string{"<html", "<div", "<span", "<section", "<button", "<a ", "<tr", "<ul", "<p>", "strings.Builder"} {
+		if strings.Contains(string(src), tag) {
+			t.Errorf("ops.go contains %q; put markup in ops.templ", tag)
+		}
+	}
+}
+
+func TestOpsJobPageRendersFromTemplates(t *testing.T) {
+	s := &Server{cfg: Config{StatePath: t.TempDir() + "/state.json", Ops: OpsConfig{Enabled: true, LogTailBytes: 10000}}}
+	writeTestStatus(t, s, JobStatus{ID: "job-<x>", State: "cancelled", Agent: "codex", Target: "https://3.basecampapi.com/1/buckets/11/card_tables/cards/1.json", StartedAt: "2026-09-29T10:00:00Z", Message: "<script>alert(1)</script>"})
+	writeTestLog(t, s, "job-<x>", "line one\n<b>two</b>\n")
+	detail := s.renderJobDetail("job-<x>")
+	if strings.Contains(detail, "<script>alert(1)") || !strings.Contains(detail, "&lt;script&gt;") {
+		t.Fatalf("job content was not escaped:\n%s", detail)
+	}
+	if !strings.Contains(detail, `class="badge gap-1 badge-neutral"`) {
+		t.Fatalf("cancelled badge should be solid neutral:\n%s", detail)
+	}
+	if missing := s.renderJobDetail("nope"); !strings.Contains(missing, "Job not found.") {
+		t.Fatalf("missing job not reported:\n%s", missing)
+	}
+	if strings.Contains(detail, "line one") {
+		t.Fatalf("job output belongs in the output signal, not the detail markup:\n%s", detail)
+	}
+	var stream bytes.Buffer
+	s.sendOpsPatches(&stream, "job-<x>", 0)
+	if !strings.Contains(stream.String(), "event: datastar-patch-signals\ndata: signals {\"output\":\"line one\\n\\u003cb\\u003etwo\\u003c/b\\u003e\\n\"}") {
+		t.Fatalf("job output was not sent as a signal:\n%s", stream.String())
+	}
+	if strings.Contains(stream.String(), `id="jobs"`) {
+		t.Fatalf("a job page has no jobs section to patch:\n%s", stream.String())
+	}
+}
+
+func writeTestLog(t *testing.T, s *Server, id, output string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.jobsRoot(), id, "output.log"), []byte(output), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The dashboard is DaisyUI, Tailwind, and Datastar: no custom scripts or
+// stylesheets.
+func TestOpsServesNoCustomAssets(t *testing.T) {
+	entries, err := os.ReadDir("static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "datastar.js" {
+			t.Errorf("static/%s: behavior belongs in Datastar attributes and styling in DaisyUI classes", e.Name())
+		}
+	}
+	page := renderFragment(jobPage("a", "/ops", "/ops/stream?job=a"))
+	for _, forbidden := range []string{"<style", "<script>", "ops.js", "ops.css"} {
+		if strings.Contains(page, forbidden) {
+			t.Errorf("job page contains %q", forbidden)
+		}
 	}
 }

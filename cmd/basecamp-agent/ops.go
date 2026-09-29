@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"log"
 	"net/http"
@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/a-h/templ"
 )
 
 //go:embed static/datastar.js
@@ -144,31 +146,7 @@ func (s *Server) opsIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderOpsPage(w, 0)
-}
-
-// renderOpsPage renders the jobs dashboard, limited to one Basecamp project
-// when project is not 0.
-func (s *Server) renderOpsPage(w http.ResponseWriter, project int64) {
-	title, subtitle := "Basecamp Agent Jobs", `<p class="mt-1 text-sm text-neutral-content">Jobs from every configured Basecamp project</p>`
-	if project != 0 {
-		id := strconv.FormatInt(project, 10)
-		title = s.projectLabel(project)
-		subtitle = `<p class="mt-1 text-sm text-neutral-content">Basecamp project <span class="font-mono">` + id + `</span> · <a class="link link-hover" target="_blank" rel="noopener noreferrer" href="https://app.basecamp.com/` + strconv.FormatInt(s.cfg.AllowedAccountID, 10) + `/projects/` + id + `">Open in Basecamp ↗</a></p>`
-	}
-	nav := s.opsProjectNav(project)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `<!doctype html>
-<html data-theme="night"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>%[2]s</title>
-<link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
-<link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css">
-<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-<style>%[1]s</style></head><body data-init="@get('/ops/stream%[4]s')" class="min-h-screen bg-base-200 text-base-content">
-<main class="ops-shell"><header class="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 class="text-2xl font-bold tracking-tight md:text-3xl">%[2]s</h1>%[3]s</div><span class="badge badge-info badge-outline gap-2"><span class="status status-info animate-pulse"></span>live</span></header>
-%[5]s<section id="jobs"><div class="skeleton h-32 w-full rounded-box"></div></section></main>
-<script type="module" src="/ops/datastar.js"></script>
-</body></html>`, detailCSS(), html.EscapeString(title), subtitle, projectQuery(project), nav)
+	s.renderOpsPage(w, r, 0)
 }
 
 func (s *Server) opsRoute(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +168,7 @@ func (s *Server) opsRoute(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		s.renderOpsPage(w, project)
+		s.renderOpsPage(w, r, project)
 		return
 	}
 	if !strings.HasPrefix(path, "jobs/") {
@@ -552,17 +530,6 @@ func (s *Server) opsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) opsJobDetail(w http.ResponseWriter, r *http.Request, id string) {
-	back := "/ops"
-	if st, err := s.readStatus(id); err == nil {
-		if project := jobProjectID(st.Target); project != 0 {
-			back = "/ops/projects/" + strconv.FormatInt(project, 10)
-		}
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `<!doctype html><html data-theme="night"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>%s</title><link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css"><link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css"><script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script><style>%s</style></head><body data-init="@get('/ops/stream?job=%[3]s')" class="min-h-screen bg-base-200"><main class="ops-shell"><a class="btn btn-ghost btn-sm mb-4" href="%[5]s">← jobs</a><section id="job-detail"><div class="skeleton h-64 w-full"></div></section></main><script type="module" src="/ops/datastar.js"></script><script>%[4]s</script></body></html>`, html.EscapeString(id), detailCSS(), html.EscapeString(id), outputPanelJS(), back)
-}
-
 func (s *Server) opsJobStream(w http.ResponseWriter, r *http.Request, id string) {
 	s.opsStream(w, r)
 }
@@ -584,7 +551,7 @@ func (s *Server) opsStopJob(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	s.notifyOps()
 	w.Header().Set("Content-Type", "text/event-stream")
-	s.sendOpsPatches(w, id, opsProjectParam(r))
+	s.sendActionPatches(w, r, id)
 }
 
 // opsCancelJob retires a stopped or failed job for good. Cancelling is the way
@@ -608,7 +575,7 @@ func (s *Server) opsCancelJob(w http.ResponseWriter, r *http.Request, id string)
 	log.Printf("cancelled job=%s", id)
 	s.notifyOps()
 	w.Header().Set("Content-Type", "text/event-stream")
-	s.sendOpsPatches(w, id, opsProjectParam(r))
+	s.sendActionPatches(w, r, id)
 }
 
 func (s *Server) opsRestartJob(w http.ResponseWriter, r *http.Request, id string) {
@@ -647,7 +614,7 @@ func (s *Server) opsRestartJob(w http.ResponseWriter, r *http.Request, id string
 	case s.jobs <- job:
 		s.notifyOps()
 		w.Header().Set("Content-Type", "text/event-stream")
-		s.sendOpsPatches(w, id, opsProjectParam(r))
+		s.sendActionPatches(w, r, id)
 	default:
 		http.Error(w, "job queue full", http.StatusServiceUnavailable)
 	}
@@ -685,11 +652,24 @@ func (s *Server) notifyOps() {
 	}
 }
 
+// sendOpsPatches patches what the requesting page shows: a job page shows one
+// job's detail, every other page the jobs section.
 func (s *Server) sendOpsPatches(w io.Writer, jobID string, project int64) {
-	sendDatastarPatch(w, s.renderJobsTable(project))
 	if jobID != "" {
 		sendDatastarPatch(w, s.renderJobDetail(jobID))
+		sendDatastarSignals(w, map[string]any{"output": s.jobOutput(jobID)})
+		return
 	}
+	sendDatastarPatch(w, s.renderJobsTable(project))
+}
+
+// sendActionPatches answers an action posted from a job page or a jobs list.
+func (s *Server) sendActionPatches(w io.Writer, r *http.Request, id string) {
+	if r.URL.Query().Get("view") == "detail" {
+		s.sendOpsPatches(w, id, 0)
+		return
+	}
+	s.sendOpsPatches(w, "", opsProjectParam(r))
 }
 
 func sendDatastarPatch(w io.Writer, elements string) {
@@ -700,94 +680,14 @@ func sendDatastarPatch(w io.Writer, elements string) {
 	_, _ = io.WriteString(w, "\n")
 }
 
-func (s *Server) renderJobsTable(project int64) string {
-	jobs := s.readStatuses()
-	if project != 0 {
-		filtered := jobs[:0:0]
-		for _, st := range jobs {
-			if jobProjectID(st.Target) == project {
-				filtered = append(filtered, st)
-			}
-		}
-		jobs = filtered
-	}
-	var active, completed, attention int
-	for _, st := range jobs {
-		switch {
-		case isActiveJobState(st.State):
-			active++
-		case st.State == "completed":
-			completed++
-		case st.State == "failed" || st.State == "stopped":
-			attention++
-		}
-	}
-	var b strings.Builder
-	b.WriteString(`<section id="jobs" class="space-y-5">`)
-	b.WriteString(`<div class="grid grid-cols-2 gap-3 md:grid-cols-4"><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Total jobs</div><div class="stat-value">` + strconv.Itoa(len(jobs)) + `</div><div class="stat-desc">retained runs</div></div><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Active</div><div class="stat-value text-info">` + strconv.Itoa(active) + `</div><div class="stat-desc">preparing / running</div></div><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Completed</div><div class="stat-value text-success">` + strconv.Itoa(completed) + `</div><div class="stat-desc">PRs and clean exits</div></div><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Needs attention</div><div class="stat-value text-warning">` + strconv.Itoa(attention) + `</div><div class="stat-desc">failed or stopped</div></div></div>`)
-	if len(jobs) == 0 {
-		b.WriteString(`<div class="card border border-dashed border-base-300 bg-base-100 shadow"><div class="card-body items-center py-16 text-center"><div class="text-5xl">☕</div><h2 class="card-title">No agent jobs yet</h2><p class="max-w-lg text-neutral-content">When an allowed Basecamp event asks an agent to work, the run will appear here with live logs and actions.</p></div></div></section>`)
-		return b.String()
-	}
-	b.WriteString(`<section class="card border border-base-300 bg-base-100 shadow-xl"><div class="card-body p-0"><div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"><h2 class="font-semibold">Recent runs</h2><span class="badge badge-info badge-outline"><span class="status status-info"></span> streaming</span></div><div class="overflow-x-auto"><table class="table table-zebra"><thead><tr><th>State</th><th>Job</th><th class="hidden md:table-cell">Repo</th><th class="hidden lg:table-cell">Started</th><th class="hidden lg:table-cell">Finished</th><th>Links</th></tr></thead><tbody>`)
-	for _, st := range jobs {
-		stateLabel, badgeClass := statusPresentation(st.State)
-		b.WriteString(`<tr><td><span class="badge ` + badgeStyle(badgeClass) + ` gap-1"><span class="status ` + statusDotClass(st.State) + `"></span>` + html.EscapeString(stateLabel) + `</span></td><td><a class="link link-primary font-mono font-semibold" href="/ops/jobs/` + html.EscapeString(st.ID) + `">` + html.EscapeString(st.ID) + `</a><br><span class="text-xs text-neutral-content">` + html.EscapeString(st.Agent) + ` · event ` + strconv.FormatInt(st.EventID, 10) + ` · attempt ` + strconv.Itoa(st.Attempt) + `</span>` +
-			// Narrow screens drop the columns below; fold their content in here
-			// so nothing is lost when they are hidden.
-			`<span class="mt-1 block text-xs text-neutral-content md:hidden">` + html.EscapeString(emptyDash(st.Repo)) + ` · <span class="font-mono">` + html.EscapeString(emptyDash(st.Branch)) + `</span></span>` +
-			`<span class="mt-0.5 block text-xs text-neutral-content lg:hidden">` + html.EscapeString(st.StartedAt) + ` → ` + html.EscapeString(emptyDash(st.EndedAt)) + `</span>` +
-			`</td><td class="hidden md:table-cell"><span class="font-medium">` + html.EscapeString(emptyDash(st.Repo)) + `</span><br><span class="text-xs text-neutral-content font-mono">` + html.EscapeString(emptyDash(st.Branch)) + `</span></td><td class="hidden lg:table-cell"><span class="text-xs whitespace-nowrap">` + html.EscapeString(st.StartedAt) + `</span></td><td class="hidden lg:table-cell"><span class="text-xs whitespace-nowrap">` + html.EscapeString(emptyDash(st.EndedAt)) + `</span></td><td><div class="join join-vertical sm:join-horizontal">`)
-		if st.Target != "" {
-			b.WriteString(`<a class="btn join-item btn-xs btn-outline" target="_blank" rel="noopener noreferrer" href="` + html.EscapeString(basecampAppURL(st.Target)) + `">Basecamp</a>`)
-		}
-		if st.PRURL != "" {
-			b.WriteString(`<a class="btn join-item btn-xs btn-primary" target="_blank" rel="noopener noreferrer" href="` + html.EscapeString(st.PRURL) + `">PR</a>`)
-		}
-		if st.State == "failed" || st.State == "stopped" {
-			b.WriteString(`<button class="btn join-item btn-xs btn-warning" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/restart` + projectQuery(project) + `')">Restart</button>`)
-		}
-		if isCancellableJobState(st.State) {
-			b.WriteString(`<button class="btn join-item btn-xs btn-outline btn-error" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/cancel` + projectQuery(project) + `')">Cancel</button>`)
-		}
-		b.WriteString(`</div></td></tr>`)
-	}
-	b.WriteString(`</tbody></table></div></div></section></section>`)
-	return b.String()
-}
-
-func (s *Server) renderJobDetail(id string) string {
-	st, err := s.readStatus(id)
+// sendDatastarSignals patches Datastar signals, such as a job's output.
+func sendDatastarSignals(w io.Writer, signals map[string]any) {
+	b, err := json.Marshal(signals)
 	if err != nil {
-		return `<p>Job not found.</p>`
+		log.Printf("encode ops signals: %v", err)
+		return
 	}
-	output := html.EscapeString(s.jobOutput(id))
-	stateLabel, badgeClass := statusPresentation(st.State)
-	var b strings.Builder
-	b.WriteString(`<section id="job-detail" class="space-y-5"><div class="card border border-base-300 bg-base-100 shadow-xl"><div class="card-body"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="mb-2 inline-flex items-center gap-2 rounded-full bg-base-200 px-3 py-1 text-xs uppercase tracking-[0.2em] text-neutral-content">` + html.EscapeString(st.Agent) + ` agent</div><h1 class="card-title font-mono break-all text-xl md:text-2xl">` + html.EscapeString(st.ID) + `</h1><p class="text-sm text-neutral-content">event ` + strconv.FormatInt(st.EventID, 10) + ` · attempt ` + strconv.Itoa(st.Attempt) + ` · pgid ` + strconv.Itoa(st.PGID) + `</p></div><span class="badge ` + badgeClass + ` badge-outline gap-1"><span class="status ` + statusDotClass(st.State) + `"></span>` + html.EscapeString(stateLabel) + `</span></div><div class="card-actions mt-4">`)
-	if isActiveJobState(st.State) {
-		b.WriteString(`<button class="btn btn-error btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/stop` + `')">Stop job</button>`)
-	} else if st.State == "failed" || st.State == "stopped" {
-		b.WriteString(`<button class="btn btn-warning btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/restart` + `')">Restart as fresh attempt</button>`)
-	}
-	if isCancellableJobState(st.State) {
-		b.WriteString(`<button class="btn btn-outline btn-error btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/cancel` + `')">Cancel</button>`)
-	}
-	if st.Target != "" {
-		b.WriteString(`<a class="btn btn-outline btn-sm" target="_blank" rel="noopener noreferrer" href="` + html.EscapeString(basecampAppURL(st.Target)) + `">Basecamp trigger</a>`)
-	}
-	if st.PRURL != "" {
-		b.WriteString(`<a class="btn btn-primary btn-sm" target="_blank" rel="noopener noreferrer" href="` + html.EscapeString(st.PRURL) + `">PR</a>`)
-	}
-	b.WriteString(`</div></div></div>`)
-	b.WriteString(`<div class="grid grid-cols-2 gap-3 md:grid-cols-4"><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Started</div><div class="stat-value text-sm">` + html.EscapeString(emptyDash(st.StartedAt)) + `</div></div><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Finished</div><div class="stat-value text-sm">` + html.EscapeString(emptyDash(st.EndedAt)) + `</div></div><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Repo</div><div class="stat-value text-sm font-mono">` + html.EscapeString(emptyDash(st.Repo)) + `</div></div><div class="stat rounded-box border border-base-300 bg-base-100 shadow"><div class="stat-title">Base</div><div class="stat-value text-sm font-mono">` + html.EscapeString(emptyDash(st.Base)) + `</div></div></div>`)
-	b.WriteString(`<div class="card border border-base-300 bg-base-100 shadow"><div class="card-body"><dl class="grid gap-4 md:grid-cols-2"><div><dt class="text-xs uppercase tracking-wide text-neutral-content">Branch</dt><dd class="font-mono break-all">` + html.EscapeString(emptyDash(st.Branch)) + `</dd></div><div><dt class="text-xs uppercase tracking-wide text-neutral-content">Worktree</dt><dd class="font-mono text-xs break-all">` + html.EscapeString(emptyDash(st.Worktree)) + `</dd></div></dl></div></div>`)
-	b.WriteString(`<section class="card border border-base-300 bg-base-100 shadow"><div class="card-body"><div class="flex items-center justify-between gap-3"><h2 class="card-title">Output</h2><button type="button" class="btn btn-ghost btn-xs" onclick="copyJobOutput(this)">Copy</button></div><pre id="job-output" class="log-panel p-4 text-sm">` + output + `</pre></div></section>`)
-	if st.Message != "" {
-		b.WriteString(`<section class="card border border-base-300 bg-base-100 shadow"><div class="card-body"><h2 class="card-title">Final message</h2><pre class="log-panel p-4 text-sm">` + html.EscapeString(st.Message) + `</pre></div></section>`)
-	}
-	b.WriteString(`</section>`)
-	return b.String()
+	_, _ = fmt.Fprintf(w, "event: datastar-patch-signals\ndata: signals %s\n\n", b)
 }
 
 // jobOutput returns the tail of a run's log. Jobs recorded before the streams
@@ -828,14 +728,6 @@ func tailFile(path string, max int64) string {
 		return "[tail truncated]\n" + string(b)
 	}
 	return string(b)
-}
-
-func outputPanelJS() string {
-	return `(()=>{let panel=null;let outputObserver=null;let following=true;const nearBottom=el=>el.scrollHeight-el.scrollTop-el.clientHeight<32;const scrollToBottom=()=>{if(panel&&following)requestAnimationFrame(()=>{if(panel&&following)panel.scrollTop=panel.scrollHeight})};const bind=()=>{const next=document.getElementById('job-output');if(next===panel)return;if(outputObserver)outputObserver.disconnect();panel=next;if(!panel)return;panel.addEventListener('scroll',()=>{following=nearBottom(panel)},{passive:true});outputObserver=new MutationObserver(scrollToBottom);outputObserver.observe(panel,{childList:true,subtree:true,characterData:true});scrollToBottom()};new MutationObserver(bind).observe(document.body,{childList:true,subtree:true});bind();window.copyJobOutput=async button=>{const text=document.getElementById('job-output')?.textContent||'';try{await navigator.clipboard.writeText(text)}catch(_){const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}const old=button.textContent;button.textContent='Copied';setTimeout(()=>{button.textContent=old},1200)}})();`
-}
-
-func detailCSS() string {
-	return `.ops-shell{max-width:1400px;margin:0 auto;padding:1.5rem}.log-panel{white-space:pre-wrap;word-break:break-word;max-height:70vh;overflow:auto;border-radius:var(--radius-box);background:var(--color-base-200);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}@media(max-width:900px){.ops-shell{padding:.75rem}}`
 }
 
 func statusPresentation(state string) (string, string) {
@@ -922,47 +814,6 @@ func (s *Server) projectLabel(project int64) string {
 	return "Project " + strconv.FormatInt(project, 10)
 }
 
-// opsProjectNav lists all jobs and each configured project with job counts,
-// marking the current page.
-func (s *Server) opsProjectNav(current int64) string {
-	if len(s.cfg.AllowedProjectIDs) == 0 {
-		return ""
-	}
-	total, active := map[int64]int{}, map[int64]int{}
-	for _, st := range s.readStatuses() {
-		project := jobProjectID(st.Target)
-		total[project]++
-		total[0]++
-		if isActiveJobState(st.State) {
-			active[project]++
-			active[0]++
-		}
-	}
-	item := func(project int64, href, label, id string) string {
-		class := ""
-		if project == current {
-			class = ` class="menu-active"`
-		}
-		if id != "" {
-			id = `<code class="text-xs text-neutral-content">#` + id + `</code>`
-		}
-		badges := `<span class="badge badge-sm badge-ghost">` + plural(total[project], "job") + `</span>`
-		if active[project] > 0 {
-			badges += `<span class="badge badge-sm badge-info">` + strconv.Itoa(active[project]) + ` running</span>`
-		}
-		return `<li><a` + class + ` href="` + href + `">` + html.EscapeString(label) + id + badges + `</a></li>`
-	}
-	var b strings.Builder
-	b.WriteString(`<ul class="menu menu-sm mb-5 w-fit p-0">`)
-	b.WriteString(item(0, "/ops", "All projects", ""))
-	for _, project := range s.cfg.AllowedProjectIDs {
-		id := strconv.FormatInt(project, 10)
-		b.WriteString(item(project, "/ops/projects/"+id, s.projectLabel(project), id))
-	}
-	b.WriteString(`</ul>`)
-	return b.String()
-}
-
 func plural(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
@@ -970,11 +821,115 @@ func plural(n int, noun string) string {
 	return strconv.Itoa(n) + " " + noun + "s"
 }
 
-// badgeStyle outlines state badges, except neutral ones: an outlined neutral
-// badge is nearly invisible on the dark theme, so it is drawn solid instead.
-func badgeStyle(badgeClass string) string {
-	if badgeClass == "badge-neutral" {
-		return badgeClass
+func (s *Server) renderOpsPage(w http.ResponseWriter, r *http.Request, project int64) {
+	v := opsPageView{Title: "Basecamp Agent Jobs", Project: project, StreamURL: "/ops/stream" + projectQuery(project), Menu: s.projectMenuItems(project)}
+	if project != 0 {
+		v.Title = s.projectLabel(project)
+		v.BasecampURL = fmt.Sprintf("https://app.basecamp.com/%d/projects/%d", s.cfg.AllowedAccountID, project)
 	}
-	return badgeClass + " badge-outline"
+	renderPage(w, r, opsIndexPage(v))
+}
+
+func (s *Server) opsJobDetail(w http.ResponseWriter, r *http.Request, id string) {
+	back := "/ops"
+	if st, err := s.readStatus(id); err == nil {
+		if project := jobProjectID(st.Target); project != 0 {
+			back = "/ops/projects/" + strconv.FormatInt(project, 10)
+		}
+	}
+	renderPage(w, r, jobPage(id, back, "/ops/stream?job="+url.QueryEscape(id)))
+}
+
+func renderPage(w http.ResponseWriter, r *http.Request, page templ.Component) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := page.Render(r.Context(), w); err != nil {
+		log.Printf("render ops page: %v", err)
+	}
+}
+
+// renderFragment renders a component for a Datastar patch.
+func renderFragment(c templ.Component) string {
+	var b bytes.Buffer
+	if err := c.Render(context.Background(), &b); err != nil {
+		log.Printf("render ops fragment: %v", err)
+	}
+	return b.String()
+}
+
+func (s *Server) renderJobsTable(project int64) string {
+	v := jobsView{Project: project}
+	for _, st := range s.readStatuses() {
+		if project != 0 && jobProjectID(st.Target) != project {
+			continue
+		}
+		v.Jobs = append(v.Jobs, st)
+		switch {
+		case isActiveJobState(st.State):
+			v.Active++
+		case st.State == "completed":
+			v.Completed++
+		case st.State == "failed" || st.State == "stopped":
+			v.Attention++
+		}
+	}
+	return renderFragment(jobsSection(v))
+}
+
+func (s *Server) renderJobDetail(id string) string {
+	st, err := s.readStatus(id)
+	if err != nil {
+		return renderFragment(jobDetail(jobDetailView{}))
+	}
+	return renderFragment(jobDetail(jobDetailView{Found: true, Status: st}))
+}
+
+// projectMenuItems lists all jobs and each configured project with job
+// counts, marking the current page.
+func (s *Server) projectMenuItems(current int64) []projectMenuItem {
+	if len(s.cfg.AllowedProjectIDs) == 0 {
+		return nil
+	}
+	total, running := map[int64]int{}, map[int64]int{}
+	for _, st := range s.readStatuses() {
+		project := jobProjectID(st.Target)
+		total[project]++
+		total[0]++
+		if isActiveJobState(st.State) {
+			running[project]++
+			running[0]++
+		}
+	}
+	items := []projectMenuItem{{Href: "/ops", Label: "All projects", Active: current == 0, Jobs: total[0], Running: running[0]}}
+	for _, project := range s.cfg.AllowedProjectIDs {
+		id := strconv.FormatInt(project, 10)
+		items = append(items, projectMenuItem{Href: "/ops/projects/" + id, Label: s.projectLabel(project), ID: id, Active: current == project, Jobs: total[project], Running: running[project]})
+	}
+	return items
+}
+
+func datastarGet(url string) string  { return "@get('" + url + "')" }
+func datastarPost(url string) string { return "@post('" + url + "')" }
+
+// jobActionURL is where a job page (detail) or a jobs list posts an action.
+func jobActionURL(id, action string, project int64, detail bool) string {
+	u := "/ops/jobs/" + url.PathEscape(id) + "/" + action
+	if detail {
+		return u + "?view=detail"
+	}
+	return u + projectQuery(project)
+}
+
+func stateLabel(state string) string {
+	label, _ := statusPresentation(state)
+	return label
+}
+
+// stateBadgeClass outlines state badges, except neutral ones: an outlined
+// neutral badge is nearly invisible on the dark theme, so it is drawn solid.
+func stateBadgeClass(state string) string {
+	_, class := statusPresentation(state)
+	if class == "badge-neutral" {
+		return class
+	}
+	return class + " badge-outline"
 }
