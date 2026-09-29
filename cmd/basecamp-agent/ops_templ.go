@@ -659,7 +659,7 @@ func jobsSection(v jobsView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "<section class=\"card border border-base-300 bg-base-100 shadow-xl\"><div class=\"card-body p-0\"><div class=\"flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3\"><h2 class=\"font-semibold\">Recent runs</h2><span class=\"badge badge-info badge-outline\"><span class=\"status status-info\"></span> streaming</span></div><div class=\"overflow-x-auto\"><table class=\"table table-zebra\"><thead><tr><th>State</th><th>Job</th><th class=\"hidden md:table-cell\">Repo</th><th class=\"hidden lg:table-cell\">Started</th><th class=\"hidden lg:table-cell\">Finished</th><th>Links</th></tr></thead> <tbody>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "<section class=\"card border border-base-300 bg-base-100 shadow-xl\"><div class=\"card-body p-0\"><div class=\"flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3\"><h2 class=\"font-semibold\">Recent runs</h2></div><div class=\"overflow-x-auto\"><table class=\"table table-zebra\"><thead><tr><th>State</th><th>Job</th><th class=\"hidden md:table-cell\">Repo</th><th class=\"hidden lg:table-cell\">Started</th><th class=\"hidden lg:table-cell\">Finished</th><th>Links</th></tr></thead> <tbody>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -718,7 +718,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var34 templ.SafeURL
 		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/ops/jobs/" + st.ID))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 185, Col: 98}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 184, Col: 98}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 		if templ_7745c5c3_Err != nil {
@@ -731,7 +731,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(st.ID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 185, Col: 108}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 184, Col: 108}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {
@@ -744,7 +744,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var36 string
 		templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(st.Agent)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 187, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 186, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 		if templ_7745c5c3_Err != nil {
@@ -757,7 +757,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var37 string
 		templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatInt(st.EventID, 10))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 187, Col: 103}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 186, Col: 103}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 		if templ_7745c5c3_Err != nil {
@@ -770,7 +770,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var38 string
 		templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(st.Attempt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 187, Col: 143}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 186, Col: 143}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 		if templ_7745c5c3_Err != nil {
@@ -783,7 +783,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(st.Repo))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 190, Col: 87}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 189, Col: 87}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 		if templ_7745c5c3_Err != nil {
@@ -796,7 +796,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var40 string
 		templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(st.Branch))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 190, Col: 139}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 189, Col: 139}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 		if templ_7745c5c3_Err != nil {
@@ -809,7 +809,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var41 string
 		templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(st.StartedAt)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 191, Col: 83}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 190, Col: 83}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 		if templ_7745c5c3_Err != nil {
@@ -822,7 +822,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var42 string
 		templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(st.EndedAt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 191, Col: 113}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 190, Col: 113}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 		if templ_7745c5c3_Err != nil {
@@ -835,7 +835,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var43 string
 		templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(st.Repo))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 194, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 193, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 		if templ_7745c5c3_Err != nil {
@@ -848,7 +848,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var44 string
 		templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(st.Branch))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 196, Col: 78}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 195, Col: 78}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 		if templ_7745c5c3_Err != nil {
@@ -861,7 +861,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var45 string
 		templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(st.StartedAt)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 198, Col: 89}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 197, Col: 89}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 		if templ_7745c5c3_Err != nil {
@@ -874,7 +874,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 		var templ_7745c5c3_Var46 string
 		templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(st.EndedAt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 199, Col: 98}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 198, Col: 98}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 		if templ_7745c5c3_Err != nil {
@@ -892,7 +892,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 			var templ_7745c5c3_Var47 templ.SafeURL
 			templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(basecampAppURL(st.Target)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 203, Col: 138}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 202, Col: 138}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 			if templ_7745c5c3_Err != nil {
@@ -911,7 +911,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 			var templ_7745c5c3_Var48 templ.SafeURL
 			templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(st.PRURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 206, Col: 121}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 205, Col: 121}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 			if templ_7745c5c3_Err != nil {
@@ -930,7 +930,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 			var templ_7745c5c3_Var49 string
 			templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.ResolveAttributeValue(datastarPost(jobActionURL(st.ID, "restart", project, false)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 209, Col: 130}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 208, Col: 130}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var49)
 			if templ_7745c5c3_Err != nil {
@@ -949,7 +949,7 @@ func jobRow(st JobStatus, project int64) templ.Component {
 			var templ_7745c5c3_Var50 string
 			templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.ResolveAttributeValue(datastarPost(jobActionURL(st.ID, "cancel", project, false)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 212, Col: 139}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 211, Col: 139}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var50)
 			if templ_7745c5c3_Err != nil {
@@ -1006,7 +1006,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var52 string
 			templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(v.Status.Agent)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 228, Col: 85}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 227, Col: 85}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 			if templ_7745c5c3_Err != nil {
@@ -1019,7 +1019,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var53 string
 			templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(v.Status.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 229, Col: 83}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 228, Col: 83}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 			if templ_7745c5c3_Err != nil {
@@ -1032,7 +1032,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var54 string
 			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatInt(v.Status.EventID, 10))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 230, Col: 94}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 229, Col: 94}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 			if templ_7745c5c3_Err != nil {
@@ -1045,7 +1045,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(v.Status.Attempt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 230, Col: 140}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 229, Col: 140}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 			if templ_7745c5c3_Err != nil {
@@ -1058,7 +1058,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var56 string
 			templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(v.Status.PGID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 230, Col: 180}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 229, Col: 180}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 			if templ_7745c5c3_Err != nil {
@@ -1084,7 +1084,7 @@ func jobDetail(v jobDetailView) templ.Component {
 				var templ_7745c5c3_Var57 string
 				templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue(datastarPost(jobActionURL(v.Status.ID, "stop", 0, true)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 236, Col: 116}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 235, Col: 116}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 				if templ_7745c5c3_Err != nil {
@@ -1102,7 +1102,7 @@ func jobDetail(v jobDetailView) templ.Component {
 				var templ_7745c5c3_Var58 string
 				templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.ResolveAttributeValue(datastarPost(jobActionURL(v.Status.ID, "restart", 0, true)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 238, Col: 121}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 237, Col: 121}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var58)
 				if templ_7745c5c3_Err != nil {
@@ -1121,7 +1121,7 @@ func jobDetail(v jobDetailView) templ.Component {
 				var templ_7745c5c3_Var59 string
 				templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue(datastarPost(jobActionURL(v.Status.ID, "cancel", 0, true)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 241, Col: 130}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 240, Col: 130}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var59)
 				if templ_7745c5c3_Err != nil {
@@ -1140,7 +1140,7 @@ func jobDetail(v jobDetailView) templ.Component {
 				var templ_7745c5c3_Var60 templ.SafeURL
 				templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(basecampAppURL(v.Status.Target)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 244, Col: 136}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 243, Col: 136}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 				if templ_7745c5c3_Err != nil {
@@ -1159,7 +1159,7 @@ func jobDetail(v jobDetailView) templ.Component {
 				var templ_7745c5c3_Var61 templ.SafeURL
 				templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(v.Status.PRURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 247, Col: 119}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 246, Col: 119}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
 				if templ_7745c5c3_Err != nil {
@@ -1197,7 +1197,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var62 string
 			templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(v.Status.Branch))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 263, Col: 67}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 262, Col: 67}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 			if templ_7745c5c3_Err != nil {
@@ -1210,7 +1210,7 @@ func jobDetail(v jobDetailView) templ.Component {
 			var templ_7745c5c3_Var63 string
 			templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(emptyDash(v.Status.Worktree))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 267, Col: 77}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 266, Col: 77}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 			if templ_7745c5c3_Err != nil {
@@ -1272,7 +1272,7 @@ func jobDetail(v jobDetailView) templ.Component {
 				var templ_7745c5c3_Var68 string
 				templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs(v.Status.Message)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 296, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 295, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 				if templ_7745c5c3_Err != nil {

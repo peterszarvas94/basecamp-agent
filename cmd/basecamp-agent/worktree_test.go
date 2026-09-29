@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -152,5 +153,46 @@ func TestBulletListCapsLongLists(t *testing.T) {
 	got := bulletList(items, 2)
 	if got != "- `a`\n- `b`\n- …and 2 more\n" {
 		t.Errorf("capped list = %q", got)
+	}
+}
+
+func TestFindPRURLIgnoresWrapperNoise(t *testing.T) {
+	noisy := "mise by @jdx – installing 1 tool\nmise ⇢ gh@2.101.0  124ms · already installed\nmise ~/.config/mise/config.toml tools: gh@2.101.0\nhttps://github.com/peterszarvas94/basecamp-agent-dummy/pull/1\n"
+	if got := findPRURL(noisy); got != "https://github.com/peterszarvas94/basecamp-agent-dummy/pull/1" {
+		t.Fatalf("findPRURL = %q", got)
+	}
+	if got := findPRURL("no pull request here\nhttps://github.com/o/r/issues/3"); got != "" {
+		t.Fatalf("findPRURL = %q, want none", got)
+	}
+}
+
+func TestBranchHeadIsWorktreeHeadRequiresThisRunsPush(t *testing.T) {
+	dir := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.test")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	origin, work := filepath.Join(dir, "origin.git"), filepath.Join(dir, "work")
+	run(dir, "init", "-q", "--bare", origin)
+	run(dir, "clone", "-q", origin, work)
+	run(work, "commit", "-q", "--allow-empty", "-m", "first")
+	run(work, "push", "-q", "origin", "HEAD:refs/heads/bc-card-1")
+
+	s := &Server{}
+	st := JobStatus{Worktree: work, Branch: "bc-card-1"}
+	if !s.branchHeadIsWorktreeHead(st) {
+		t.Fatal("a pushed commit should count as landed")
+	}
+	run(work, "commit", "-q", "--allow-empty", "-m", "unpushed")
+	if s.branchHeadIsWorktreeHead(st) {
+		t.Fatal("an unpushed commit must not count as landed")
+	}
+	if s.branchHeadIsWorktreeHead(JobStatus{Worktree: work, Branch: "missing"}) {
+		t.Fatal("a branch that was never pushed must not count as landed")
 	}
 }

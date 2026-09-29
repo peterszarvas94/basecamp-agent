@@ -933,3 +933,66 @@ func stateBadgeClass(state string) string {
 	}
 	return class + " badge-outline"
 }
+
+// recoverLandedFailures re-checks failed jobs whose work landed anyway:
+// reporting can fail after the branch was pushed and the pull request opened.
+// A job counts as landed only when its own commit is the pushed branch head
+// and that branch has a pull request, so an earlier attempt's PR on the same
+// branch never vouches for a run that failed before pushing.
+func (s *Server) recoverLandedFailures() {
+	statuses := s.readStatuses()
+	recovered := false
+	for _, st := range statuses {
+		if st.State != "failed" || st.PRURL != "" || st.Worktree == "" || st.Branch == "" || supersededTarget(st, statuses) {
+			continue
+		}
+		if !s.branchHeadIsWorktreeHead(st) {
+			continue
+		}
+		prURL := s.landedPR(st)
+		if prURL == "" {
+			continue
+		}
+		job, err := s.readJobRecord(st.ID)
+		if err != nil {
+			continue
+		}
+		job.JobID, job.JobDir = st.ID, filepath.Join(s.jobsRoot(), st.ID)
+		job.Repo, job.Worktree, job.Branch, job.BaseBranch = st.Repo, st.Worktree, st.Branch, st.Base
+		s.writeJobStatus(job, "completed", 0, prURL, "The agent finished and its pull request was opened; reporting the pull request failed at the time.")
+		log.Printf("recovered failed job=%s agent=%s pr=%s", job.JobID, job.Agent, prURL)
+		recovered = true
+		go s.moveCard(job.Event, job.Target, s.cfg.Cards.PROpen, job.Profile)
+		go func(job Job, msg string) {
+			var err error
+			if job.ChatRoom != 0 {
+				err = s.chatPost(job, msg)
+			} else {
+				err = s.comment(job.Event, job.Target, msg, job.Profile)
+			}
+			if err != nil {
+				log.Printf("recovery notice failed job=%s: %v", job.JobID, err)
+			}
+		}(job, fmt.Sprintf("%s opened a PR for review: %s", job.Agent, prURL))
+	}
+	if recovered {
+		s.notifyOps()
+	}
+}
+
+// branchHeadIsWorktreeHead reports whether the job's worktree commit is what
+// the remote branch points at, which proves this run pushed its work.
+func (s *Server) branchHeadIsWorktreeHead(st JobStatus) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	head, err := gitCommand(ctx, st.Worktree, "rev-parse", "HEAD")
+	if err != nil {
+		return false
+	}
+	remote, err := gitCommand(ctx, st.Worktree, "ls-remote", "origin", "refs/heads/"+st.Branch)
+	if err != nil {
+		return false
+	}
+	fields := strings.Fields(remote)
+	return len(fields) > 0 && fields[0] == strings.TrimSpace(head)
+}

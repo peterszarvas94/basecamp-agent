@@ -391,7 +391,7 @@ func TestListShowsEverythingConfigured(t *testing.T) {
 	cfg.AllowedProjectIDs = []int64{20}
 	cfg.AllowedCreatorIDs = []int64{30}
 	cfg.ProjectRepos = map[string]string{"20": "app"}
-	cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: "/srv/app"}}
+	cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: "/srv/app", Railway: RailwayRepoConfig{Project: "p-1", Service: "app", Environment: "production", Domain: "https://app.up.railway.app"}}}
 	cfg.BotIDs = map[string]int64{"codex": 40}
 	cfg.BotProfiles = map[string]string{"codex": "codex-bot"}
 	if err := writeConfig(config, cfg, false, io.Discard); err != nil {
@@ -401,9 +401,23 @@ func TestListShowsEverythingConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Public URL: not set", "Requesters: 30", "Projects (account 10):", "Project 20", "Repository: app", "Configured repositories:", "Path: /srv/app", "Enabled agents:", "Basecamp profile: codex-bot"} {
+	for _, want := range []string{"Public URL: not set", "Requesters: 30", "Projects (account 10):", "Project 20", "Repository: app", "Configured repositories:", "Path: /srv/app", "Railway: app (production) https://app.up.railway.app", "Enabled agents:", "Basecamp profile: codex-bot"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("list output does not contain %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestParseRailwayStatusReadsNewProject(t *testing.T) {
+	status := `{"id":"p-1","name":"app","services":{"edges":[{"node":{"id":"s-1","name":"app"}}]},"environments":{"edges":[{"node":{"id":"e-2","name":"staging"}},{"node":{"id":"e-1","name":"production"}}]}}`
+	got, err := parseRailwayStatus([]byte(status))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Project != "p-1" || got.Service != "app" || got.Environment != "production" {
+		t.Fatalf("unexpected context: %+v", got)
+	}
+	if _, err := parseRailwayStatus([]byte(`{"id":"p-1","services":{"edges":[{"node":{"name":"a"}},{"node":{"name":"b"}}]},"environments":{"edges":[{"node":{"name":"production"}}]}}`)); err == nil {
+		t.Fatal("two services are ambiguous and must not be guessed")
 	}
 }

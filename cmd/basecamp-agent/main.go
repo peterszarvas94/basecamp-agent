@@ -242,6 +242,8 @@ func runServer(configPath string, replayChatEvent, replayAssignment int64) error
 		return nil
 	}
 	s.recoverOrphans()
+	// Checking GitHub can take a while, so it must not delay startup.
+	go s.recoverLandedFailures()
 	go s.worker()
 	go s.pollChat()
 

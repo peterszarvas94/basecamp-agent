@@ -249,18 +249,11 @@ func openPRForBranch(ctx context.Context, repoPath, branch string) string {
 // prForBranch returns the URL of a pull request whose head is branch, in the
 // given state ("open", "merged", "closed" or "all").
 func prForBranch(ctx context.Context, repoPath, branch, state string) string {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--head", branch, "--state", state, "--json", "url", "--jq", ".[0].url // empty")
-	cmd.Dir = repoPath
-	out := &cappedOutput{limit: 16 << 10}
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Run(); err != nil {
+	stdout, _, err := runGH(ctx, repoPath, "pr", "list", "--head", branch, "--state", state, "--json", "url", "--jq", ".[0].url // empty")
+	if err != nil {
 		return ""
 	}
-	url := strings.TrimSpace(out.String())
-	if strings.HasPrefix(url, "https://github.com/") && strings.Contains(url, "/pull/") {
-		return url
-	}
-	return ""
+	return findPRURL(stdout)
 }
 
 // freeBranch finds an unused name for a fresh start, so a card whose earlier
@@ -401,16 +394,45 @@ func (s *Server) publishWorktree(job Job) (string, error) {
 	if len(title) > 160 {
 		title = title[:160]
 	}
-	cmd := exec.CommandContext(ctx, "gh", "pr", "create", "--base", job.BaseBranch, "--head", job.Branch, "--title", title, "--body", prBody(ctx, job))
-	cmd.Dir = job.Worktree
-	out := &cappedOutput{limit: 16 << 10}
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("branch pushed but PR creation failed for %s: %w: %s", job.Branch, err, out.String())
+	stdout, stderr, err := runGH(ctx, job.Worktree, "pr", "create", "--base", job.BaseBranch, "--head", job.Branch, "--title", title, "--body", prBody(ctx, job))
+	if err != nil {
+		// gh can fail after the PR exists, such as on a network error while
+		// reading the response. Look it up before calling the job failed.
+		if url := prForBranch(ctx, job.Worktree, job.Branch, "open"); url != "" {
+			return url, nil
+		}
+		return "", fmt.Errorf("branch pushed but PR creation failed for %s: %w: %s", job.Branch, err, strings.TrimSpace(stderr+"\n"+stdout))
 	}
-	url := strings.TrimSpace(out.String())
-	if !strings.HasPrefix(url, "https://github.com/") || !strings.Contains(url, "/pull/") {
-		return "", fmt.Errorf("unexpected PR URL: %q", url)
+	if url := findPRURL(stdout); url != "" {
+		return url, nil
 	}
-	return url, nil
+	if url := prForBranch(ctx, job.Worktree, job.Branch, "open"); url != "" {
+		return url, nil
+	}
+	return "", fmt.Errorf("gh pr create did not report a PR URL: %q", strings.TrimSpace(stdout))
+}
+
+// runGH runs the GitHub CLI with stdout and stderr kept apart. Wrappers such as
+// version-manager shims print progress around gh's own output, and only
+// stdout carries the answer.
+func runGH(ctx context.Context, dir string, args ...string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = dir
+	stdout := &cappedOutput{limit: 64 << 10}
+	stderr := &cappedOutput{limit: 16 << 10}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+var prURLPattern = regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/pull/\d+`)
+
+// findPRURL returns the last pull request URL in gh's output, ignoring any
+// lines a wrapper printed around it.
+func findPRURL(out string) string {
+	matches := prURLPattern.FindAllString(out, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1]
 }

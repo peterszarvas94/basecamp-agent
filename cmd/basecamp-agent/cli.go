@@ -496,6 +496,15 @@ func printRepos(opts *cliOptions, repos AllowedRepoList) error {
 				return err
 			}
 		}
+		if r := repo.Railway; r.Project != "" {
+			line := "    Railway: " + r.Service + " (" + r.Environment + ")"
+			if r.Domain != "" {
+				line += " " + r.Domain
+			}
+			if _, err := fmt.Fprintln(opts.out, line); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -740,11 +749,16 @@ func runInteractiveInDir(opts *cliOptions, dir, name string, args ...string) err
 	return c.Run()
 }
 
+// commandOutput runs a command and returns its stdout. Stderr is kept out of
+// the result, because shims and wrappers print progress there and callers
+// parse the output, and it is reported only when the command fails.
 func commandOutput(name string, args ...string) ([]byte, error) {
 	c := exec.Command(name, args...)
-	out, err := c.CombinedOutput()
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	out, err := c.Output()
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()+"\n"+string(out)))
 	}
 	return out, nil
 }
@@ -928,13 +942,15 @@ func newRailwayCommand(opts *cliOptions) *cobra.Command {
 		if len(args) == 1 {
 			folder = args[0]
 		}
+		repoIndex := -1
 		cfg, configErr := loadConfig(opts.configPath)
 		if configErr == nil {
-			_, repo, err := resolveConfiguredRepo(cfg, folder)
+			index, repo, err := resolveConfiguredRepo(cfg, folder)
 			if err != nil && !newProject {
 				return err
 			}
 			if err == nil {
+				repoIndex = index
 				folder = repo.Path
 				if project == "" {
 					project = repo.Railway.Project
@@ -975,7 +991,24 @@ func newRailwayCommand(opts *cliOptions) *cobra.Command {
 		if environment != "" {
 			deployArgs = append(deployArgs, "--environment", environment)
 		}
-		return runInteractiveInDir(opts, deployDir, "railway", deployArgs...)
+		if err := runInteractiveInDir(opts, deployDir, "railway", deployArgs...); err != nil {
+			return err
+		}
+		if !newProject || opts.dryRun || repoIndex < 0 {
+			return nil
+		}
+		// Keep the global config the source of truth: store what --new created,
+		// so later deploys of this repository need no flags.
+		created, err := linkedRailwayContext(deployDir)
+		if err != nil {
+			return fmt.Errorf("deployed, but could not read the new Railway project (store it with `basecamp-agent railway configure`): %w", err)
+		}
+		created.Domain = cfg.AllowedRepos[repoIndex].Railway.Domain
+		cfg.AllowedRepos[repoIndex].Railway = created
+		if err := writeConfig(opts.configPath, cfg, false, opts.out); err != nil {
+			return err
+		}
+		return printValue(opts, map[string]any{"repo": cfg.AllowedRepos[repoIndex].Name, "railway": created})
 	}}
 	deploy.Flags().BoolVar(&newProject, "new", false, "create a new Railway project and service")
 	deploy.Flags().BoolVarP(&yes, "yes", "y", false, "accept defaults and skip surrounding prompts")
@@ -1746,4 +1779,48 @@ func findExecutable(name string) (string, error) {
 		return path, nil
 	}
 	return "", fmt.Errorf("%s not found; run `basecamp-agent install %s`", name, name)
+}
+
+// linkedRailwayContext reads the project, service, and environment that the
+// Railway CLI linked to dir, which `railway up --new` does for the project it
+// creates. It needs exactly one service to be unambiguous.
+func linkedRailwayContext(dir string) (RailwayRepoConfig, error) {
+	c := exec.Command("railway", "status", "--json")
+	c.Dir = dir
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	out, err := c.Output()
+	if err != nil {
+		return RailwayRepoConfig{}, fmt.Errorf("railway status: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return parseRailwayStatus(out)
+}
+
+type railwayNodes struct {
+	Edges []struct {
+		Node struct {
+			Name string `json:"name"`
+		} `json:"node"`
+	} `json:"edges"`
+}
+
+func parseRailwayStatus(b []byte) (RailwayRepoConfig, error) {
+	var status struct {
+		ID           string       `json:"id"`
+		Services     railwayNodes `json:"services"`
+		Environments railwayNodes `json:"environments"`
+	}
+	if err := json.Unmarshal(b, &status); err != nil {
+		return RailwayRepoConfig{}, err
+	}
+	if status.ID == "" || len(status.Services.Edges) != 1 || len(status.Environments.Edges) == 0 {
+		return RailwayRepoConfig{}, fmt.Errorf("expected one linked project with one service, found %d service(s)", len(status.Services.Edges))
+	}
+	ctx := RailwayRepoConfig{Project: status.ID, Service: status.Services.Edges[0].Node.Name, Environment: status.Environments.Edges[0].Node.Name}
+	for _, env := range status.Environments.Edges {
+		if env.Node.Name == "production" {
+			ctx.Environment = env.Node.Name
+		}
+	}
+	return ctx, nil
 }

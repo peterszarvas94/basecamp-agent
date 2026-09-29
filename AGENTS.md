@@ -125,8 +125,13 @@ secret. Persisted job files are durable; SSE
 is only a live notification channel.
 
 On restart, reconcile running jobs. If a PR opened before reporting completed,
-recover that outcome instead of calling the job failed. Retries inspect prior
-status, logs, and worktrees, then use a fresh worktree.
+recover that outcome instead of calling the job failed. Failed jobs get the
+same check at startup: if the newest run's own commit is the pushed branch head
+and the branch has a PR, mark it completed and move the card to PR open.
+Retries inspect prior status, logs, and worktrees, then use a fresh worktree.
+
+Parse external CLI output from stdout only, and tolerantly: shims such as mise
+print extra lines around the answer.
 
 Security invariants:
 
