@@ -94,6 +94,7 @@ func (l *AllowedRepoList) UnmarshalJSON(b []byte) error {
 type State struct {
 	Seen         map[string]time.Time `json:"seen"`
 	ChatPosition string               `json:"chat_position,omitempty"`
+	ChatScope    string               `json:"chat_scope,omitempty"`
 }
 
 type WebhookEvent struct {
@@ -1122,7 +1123,11 @@ func (s *Server) basecampCombined(ctx context.Context, args ...string) (string, 
 		}
 	}
 	if len(args) < 2 || args[0] != "-P" {
-		args = append([]string{"-P", "codex-bot"}, args...)
+		profile := defaultWebhookProfile(s.cfg)
+		if profile == "" {
+			return "", errors.New("no bot Basecamp profile is configured")
+		}
+		args = append([]string{"-P", profile}, args...)
 	}
 	cmd := exec.CommandContext(ctx, s.cfg.BasecampBin, args...)
 	cmd.Dir = s.cfg.WorkDir
@@ -1130,11 +1135,13 @@ func (s *Server) basecampCombined(ctx context.Context, args ...string) (string, 
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
-	b, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(b), fmt.Errorf("basecamp %s: %w: %s", strings.Join(args, " "), err, string(b))
+	// Callers parse stdout; stderr only explains a failure.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.String(), fmt.Errorf("basecamp %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()+"\n"+stdout.String()))
 	}
-	return string(b), nil
+	return stdout.String(), nil
 }
 
 func containsInt64(xs []int64, x int64) bool {

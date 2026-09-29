@@ -87,9 +87,12 @@ as notifications, not authority: verify events through the Basecamp event feed
 and refetch recordings. Require real person-ID mention markup or newly added
 assignee IDs; plain text such as `@Claude` is insufficient.
 
-Campfire is polled because it has no webhook type. Polling currently supports
-exactly one allowed project and creator, uses the Codex bot profile, reads at
-most two pages and 4 MiB per poll, and does not replay old history on first boot.
+Campfire is polled because it has no webhook type. One event-feed query covers
+every allowed project and creator, using the Codex bot profile (or the first
+configured one). It reads at most two pages and 4 MiB per poll and never replays
+old history: the saved feed position is tied to the project and creator
+allowlists, so changing them, or a position Basecamp rejects, restarts polling
+from now.
 
 Bot profiles are separate from the operator identity. Always pass the intended
 `-P <profile>` for bot writes. Reply to the originating recording or chat room.

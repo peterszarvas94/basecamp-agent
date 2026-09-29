@@ -40,3 +40,15 @@ func TestChatJobLive(t *testing.T) {
 		t.Fatalf("unexpected chat jobs: %+v", jobs)
 	}
 }
+
+func TestJoinIDsIsStableAcrossOrder(t *testing.T) {
+	if got := joinIDs([]int64{49067163, 49042606, 0}); got != "49042606,49067163" {
+		t.Fatalf("joinIDs = %q", got)
+	}
+	if joinIDs([]int64{2, 1}) != joinIDs([]int64{1, 2}) {
+		t.Fatal("the same allowlist in another order must give the same feed filter")
+	}
+	if joinIDs(nil) != "" {
+		t.Fatal("no IDs should give an empty filter")
+	}
+}

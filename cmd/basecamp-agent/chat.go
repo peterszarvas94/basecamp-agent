@@ -53,16 +53,27 @@ func (s *Server) pollChat() {
 }
 
 func (s *Server) pollChatOnce() error {
-	if len(s.cfg.AllowedProjectIDs) != 1 || len(s.cfg.AllowedCreatorIDs) != 1 {
-		return errors.New("chat poll requires exactly one allowlisted project and creator")
+	buckets, creators := joinIDs(s.cfg.AllowedProjectIDs), joinIDs(s.cfg.AllowedCreatorIDs)
+	if buckets == "" || creators == "" {
+		return errors.New("chat poll needs at least one allowlisted project and creator")
 	}
-	projectID, creatorID := s.cfg.AllowedProjectIDs[0], s.cfg.AllowedCreatorIDs[0]
+	profile := defaultWebhookProfile(s.cfg)
+	if profile == "" {
+		return errors.New("chat poll needs a bot Basecamp profile")
+	}
+	// A feed position is bound to the filters it was minted for. When the
+	// configured projects or requesters change, start again from now rather
+	// than replaying history or failing on every poll.
+	scope := buckets + "|" + creators
 	s.mu.Lock()
+	if s.state.ChatScope != scope {
+		s.state.ChatScope, s.state.ChatPosition = scope, ""
+	}
 	position := s.state.ChatPosition
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	args := []string{"-P", "codex-bot", "events", "poll", "--buckets", strconv.FormatInt(projectID, 10), "--types", "chat.line.created", "--creators", strconv.FormatInt(creatorID, 10), "--all", "--max-pages", "2", "--json"}
+	args := []string{"-P", profile, "events", "poll", "--buckets", buckets, "--types", "chat.line.created", "--creators", creators, "--all", "--max-pages", "2", "--json"}
 	if position == "" {
 		args = append(args, "--since", "now")
 	} else {
@@ -75,6 +86,16 @@ func (s *Server) pollChatOnce() error {
 	errOut := &cappedOutput{limit: 4096}
 	cmd.Stdout, cmd.Stderr = out, errOut
 	if err := cmd.Run(); err != nil {
+		// Exit 1 means the position was minted for other filters and exit 2
+		// that it is no longer servable; either way, re-enter at now.
+		var exit *exec.ExitError
+		if position != "" && errors.As(err, &exit) && (exit.ExitCode() == 1 || exit.ExitCode() == 2) {
+			s.mu.Lock()
+			s.state.ChatPosition = ""
+			s.saveState()
+			s.mu.Unlock()
+			return fmt.Errorf("events poll rejected the saved position; restarting from now: %s", strings.TrimSpace(errOut.String()))
+		}
 		return fmt.Errorf("events poll: %w: %s", err, errOut.String())
 	}
 	if out.truncated {
@@ -112,7 +133,7 @@ func (s *Server) pollChatOnce() error {
 		if item.Kind != "chat_lines_rich_text_created" && item.Kind != "chat_lines_text_created" {
 			continue
 		}
-		if item.BucketID != projectID || item.CreatorID != creatorID ||
+		if !containsInt64(s.cfg.AllowedProjectIDs, item.BucketID) || !containsInt64(s.cfg.AllowedCreatorIDs, item.CreatorID) ||
 			item.CreatedAt.IsZero() || time.Since(item.CreatedAt) > 15*time.Minute || time.Until(item.CreatedAt) > 5*time.Minute {
 			continue
 		}
@@ -198,13 +219,13 @@ func (s *Server) chatJob(ctx context.Context, eventID, lineID, creatorID, projec
 // replayChatEvent is a local recovery command for an already-delivered feed event.
 // It does not accept arbitrary line IDs: the event must exist in Basecamp's feed.
 func (s *Server) replayChatEvent(eventID int64) error {
-	if eventID <= 0 || len(s.cfg.AllowedProjectIDs) != 1 || len(s.cfg.AllowedCreatorIDs) != 1 {
+	buckets, creators := joinIDs(s.cfg.AllowedProjectIDs), joinIDs(s.cfg.AllowedCreatorIDs)
+	if eventID <= 0 || buckets == "" || creators == "" {
 		return errors.New("invalid replay scope")
 	}
-	projectID, creatorID := s.cfg.AllowedProjectIDs[0], s.cfg.AllowedCreatorIDs[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	v, err := s.basecampJSON(ctx, "events", "poll", "--since", strconv.FormatInt(eventID-1, 10), "--buckets", strconv.FormatInt(projectID, 10), "--creators", strconv.FormatInt(creatorID, 10), "--types", "chat.line.created", "--all", "--max-pages", "2", "--json")
+	v, err := s.basecampJSON(ctx, "events", "poll", "--since", strconv.FormatInt(eventID-1, 10), "--buckets", buckets, "--creators", creators, "--types", "chat.line.created", "--all", "--max-pages", "2", "--json")
 	if err != nil {
 		return err
 	}
@@ -216,7 +237,8 @@ func (s *Server) replayChatEvent(eventID int64) error {
 		if int64FromAny(e["id"]) != eventID {
 			continue
 		}
-		if int64FromAny(e["bucket_id"]) != projectID || int64FromAny(e["creator_id"]) != creatorID || e["event_type"] != "chat.line.created" {
+		projectID, creatorID := int64FromAny(e["bucket_id"]), int64FromAny(e["creator_id"])
+		if !containsInt64(s.cfg.AllowedProjectIDs, projectID) || !containsInt64(s.cfg.AllowedCreatorIDs, creatorID) || e["event_type"] != "chat.line.created" {
 			return errors.New("event outside allowed scope")
 		}
 		created, err := time.Parse(time.RFC3339Nano, fmt.Sprint(e["created_at"]))
@@ -254,4 +276,18 @@ func (s *Server) chatPost(job Job, content string) error {
 	defer cancel()
 	_, err := s.basecampCombined(ctx, "-P", job.Profile, "chat", "post", "-", "--room", strconv.FormatInt(job.ChatRoom, 10), "--project", strconv.FormatInt(job.Event.Recording.Bucket.ID, 10), "--json", content+"\n")
 	return err
+}
+
+// joinIDs renders IDs as the sorted, comma-separated list the event feed
+// filters take, so the same allowlist always yields the same filter.
+func joinIDs(ids []int64) string {
+	sorted := append([]int64(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	parts := make([]string, 0, len(sorted))
+	for _, id := range sorted {
+		if id != 0 {
+			parts = append(parts, strconv.FormatInt(id, 10))
+		}
+	}
+	return strings.Join(parts, ",")
 }
