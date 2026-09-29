@@ -27,7 +27,9 @@ optional `/ops` dashboard.
 
 `setup` orchestrates independently useful operations. Never put an essential
 setup capability only inside the wizard. Expose new behavior through a focused
-command under `config`, `agent`, `basecamp`, `github`, or `service`.
+command under `config`, `agent`, `project`, `endpoint`, `ops`, `basecamp`,
+`github`, or `service`. Everything configured must be listable: each area has
+a `list` or `show`, and `basecamp-agent list` shows it all.
 
 Mutating commands should be idempotent where possible and honor:
 
@@ -101,9 +103,17 @@ skipped; it must not fail the coding job.
 
 ## Operations and security
 
-The `/ops` dashboard is for trusted private networks. Require `ops.token` if it
-is exposed more broadly. Persisted job files are durable; SSE is only a live
-notification channel.
+The `/ops` dashboard is served on the same public URL as the webhooks, so
+require `ops.token` (`config secret generate ops-token`) whenever the URL is
+public. The token is accepted as a bearer header, or once as `?token=`, which
+is exchanged for an HttpOnly session cookie (an HMAC of the token, so rotating
+the token ends every session) and redirected to the URL without it. Never
+put the token back into rendered links. `/ops/projects/<id>` shows one Basecamp
+project's jobs; a job's project comes from the `/buckets/<id>/` part of its
+target, and project pages pass `?project=` to their stream and actions.
+`basecamp-agent ops url` prints token-bearing links, so treat its output as a
+secret. Persisted job files are durable; SSE
+is only a live notification channel.
 
 On restart, reconcile running jobs. If a PR opened before reporting completed,
 recover that outcome instead of calling the job failed. Retries inspect prior

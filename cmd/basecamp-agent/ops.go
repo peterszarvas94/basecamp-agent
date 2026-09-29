@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,19 +73,58 @@ func (s *Server) jobsRoot() string {
 	return filepath.Join(filepathDir(s.cfg.StatePath), "jobs")
 }
 
+const opsSessionCookie = "basecamp_agent_ops"
+
+// authorizeOps accepts the ops token as a bearer header, a session cookie, or
+// a ?token= query. A query token is exchanged for the cookie and page requests
+// are redirected to the same URL without it, so the token stays out of browser
+// history, bookmarks, and links.
 func (s *Server) authorizeOps(w http.ResponseWriter, r *http.Request) bool {
 	if s.cfg.Ops.Token == "" {
 		return true
 	}
-	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if got == "" {
-		got = r.URL.Query().Get("token")
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && secretEqual(bearer, s.cfg.Ops.Token) {
+		return true
 	}
-	if got != s.cfg.Ops.Token {
+	session := opsSessionValue(s.cfg.Ops.Token)
+	if c, err := r.Cookie(opsSessionCookie); err == nil && secretEqual(c.Value, session) {
+		return true
+	}
+	query := r.URL.Query()
+	if !query.Has("token") || !secretEqual(query.Get("token"), s.cfg.Ops.Token) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	return true
+	http.SetCookie(w, &http.Cookie{
+		Name:     opsSessionCookie,
+		Value:    session,
+		Path:     "/ops",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+		SameSite: http.SameSiteLaxMode,
+	})
+	if r.Method != http.MethodGet || r.URL.Path == "/ops/stream" || r.URL.Path == "/ops/datastar.js" {
+		return true
+	}
+	query.Del("token")
+	clean := *r.URL
+	clean.RawQuery = query.Encode()
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, clean.RequestURI(), http.StatusSeeOther)
+	return false
+}
+
+// opsSessionValue derives the cookie value from the token, so the cookie never
+// holds the token and rotating the token ends every session.
+func opsSessionValue(token string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte("basecamp-agent ops session"))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func secretEqual(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func (s *Server) opsDatastar(w http.ResponseWriter, r *http.Request) {
@@ -100,18 +144,32 @@ func (s *Server) opsIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	s.renderOpsPage(w, 0)
+}
+
+// renderOpsPage renders the jobs dashboard, limited to one Basecamp project
+// when project is not 0.
+func (s *Server) renderOpsPage(w http.ResponseWriter, project int64) {
+	title, nav := "Basecamp Agent Jobs", s.opsProjectNav()
+	if project != 0 {
+		title = "Project " + strconv.FormatInt(project, 10)
+		if repo := s.cfg.ProjectRepos[strconv.FormatInt(project, 10)]; repo != "" {
+			title += " · " + repo
+		}
+		nav = `<a class="link link-hover text-sm opacity-70" href="/ops">← all projects</a>`
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, `<!doctype html>
 <html data-theme="night"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Basecamp Agent Jobs</title>
+<title>%[2]s</title>
 <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
 <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css">
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-<style>%s</style></head><body data-init="@get('/ops/stream%s')" class="min-h-screen bg-base-200 text-base-content">
-<main class="ops-shell"><header class="mb-5 flex flex-wrap items-center justify-between gap-3"><h1 class="text-2xl font-bold tracking-tight md:text-3xl">Basecamp Agent Jobs</h1><span class="badge badge-info badge-outline gap-2"><span class="status status-info animate-pulse"></span>live</span></header>
+<style>%[1]s</style></head><body data-init="@get('/ops/stream%[4]s')" class="min-h-screen bg-base-200 text-base-content">
+<main class="ops-shell"><header class="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 class="text-2xl font-bold tracking-tight md:text-3xl">%[2]s</h1>%[3]s</div><span class="badge badge-info badge-outline gap-2"><span class="status status-info animate-pulse"></span>live</span></header>
 <section id="jobs"><div class="skeleton h-32 w-full rounded-box"></div></section></main>
-<script type="module" src="/ops/datastar.js%[2]s"></script>
-</body></html>`, detailCSS(), tokenQuery(r))
+<script type="module" src="/ops/datastar.js"></script>
+</body></html>`, detailCSS(), html.EscapeString(title), nav, projectQuery(project))
 }
 
 func (s *Server) opsRoute(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +183,15 @@ func (s *Server) opsRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "jobs/stream" {
 		s.opsStream(w, r)
+		return
+	}
+	if rest, ok := strings.CutPrefix(path, "projects/"); ok && r.Method == http.MethodGet {
+		project, err := strconv.ParseInt(rest, 10, 64)
+		if err != nil || project <= 0 {
+			http.NotFound(w, r)
+			return
+		}
+		s.renderOpsPage(w, project)
 		return
 	}
 	if !strings.HasPrefix(path, "jobs/") {
@@ -461,7 +528,8 @@ func (s *Server) opsStream(w http.ResponseWriter, r *http.Request) {
 	updates := s.subscribeOps()
 	defer s.unsubscribeOps(updates)
 	jobID := r.URL.Query().Get("job")
-	s.sendOpsPatches(w, jobID, tokenQuery(r))
+	project := opsProjectParam(r)
+	s.sendOpsPatches(w, jobID, project)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -472,7 +540,7 @@ func (s *Server) opsStream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-updates:
-			s.sendOpsPatches(w, jobID, tokenQuery(r))
+			s.sendOpsPatches(w, jobID, project)
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -486,8 +554,14 @@ func (s *Server) opsStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) opsJobDetail(w http.ResponseWriter, r *http.Request, id string) {
+	back := "/ops"
+	if st, err := s.readStatus(id); err == nil {
+		if project := jobProjectID(st.Target); project != 0 {
+			back = "/ops/projects/" + strconv.FormatInt(project, 10)
+		}
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `<!doctype html><html data-theme="night"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>%s</title><link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css"><link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css"><script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script><style>%s</style></head><body data-init="@get('/ops/stream?job=%[3]s%[4]s')" class="min-h-screen bg-base-200"><main class="ops-shell"><a class="btn btn-ghost btn-sm mb-4" href="/ops%[5]s">← jobs</a><section id="job-detail"><div class="skeleton h-64 w-full"></div></section></main><script type="module" src="/ops/datastar.js%[5]s"></script><script>%[6]s</script></body></html>`, html.EscapeString(id), detailCSS(), html.EscapeString(id), tokenAmp(r), tokenQuery(r), outputPanelJS())
+	_, _ = fmt.Fprintf(w, `<!doctype html><html data-theme="night"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>%s</title><link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css"><link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css"><script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script><style>%s</style></head><body data-init="@get('/ops/stream?job=%[3]s')" class="min-h-screen bg-base-200"><main class="ops-shell"><a class="btn btn-ghost btn-sm mb-4" href="%[5]s">← jobs</a><section id="job-detail"><div class="skeleton h-64 w-full"></div></section></main><script type="module" src="/ops/datastar.js"></script><script>%[4]s</script></body></html>`, html.EscapeString(id), detailCSS(), html.EscapeString(id), outputPanelJS(), back)
 }
 
 func (s *Server) opsJobStream(w http.ResponseWriter, r *http.Request, id string) {
@@ -511,7 +585,7 @@ func (s *Server) opsStopJob(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	s.notifyOps()
 	w.Header().Set("Content-Type", "text/event-stream")
-	s.sendOpsPatches(w, id, tokenQuery(r))
+	s.sendOpsPatches(w, id, opsProjectParam(r))
 }
 
 // opsCancelJob retires a stopped or failed job for good. Cancelling is the way
@@ -535,7 +609,7 @@ func (s *Server) opsCancelJob(w http.ResponseWriter, r *http.Request, id string)
 	log.Printf("cancelled job=%s", id)
 	s.notifyOps()
 	w.Header().Set("Content-Type", "text/event-stream")
-	s.sendOpsPatches(w, id, tokenQuery(r))
+	s.sendOpsPatches(w, id, opsProjectParam(r))
 }
 
 func (s *Server) opsRestartJob(w http.ResponseWriter, r *http.Request, id string) {
@@ -574,7 +648,7 @@ func (s *Server) opsRestartJob(w http.ResponseWriter, r *http.Request, id string
 	case s.jobs <- job:
 		s.notifyOps()
 		w.Header().Set("Content-Type", "text/event-stream")
-		s.sendOpsPatches(w, id, tokenQuery(r))
+		s.sendOpsPatches(w, id, opsProjectParam(r))
 	default:
 		http.Error(w, "job queue full", http.StatusServiceUnavailable)
 	}
@@ -612,10 +686,10 @@ func (s *Server) notifyOps() {
 	}
 }
 
-func (s *Server) sendOpsPatches(w io.Writer, jobID, tok string) {
-	sendDatastarPatch(w, s.renderJobsTable(tok))
+func (s *Server) sendOpsPatches(w io.Writer, jobID string, project int64) {
+	sendDatastarPatch(w, s.renderJobsTable(project))
 	if jobID != "" {
-		sendDatastarPatch(w, s.renderJobDetail(jobID, tok))
+		sendDatastarPatch(w, s.renderJobDetail(jobID))
 	}
 }
 
@@ -627,8 +701,17 @@ func sendDatastarPatch(w io.Writer, elements string) {
 	_, _ = io.WriteString(w, "\n")
 }
 
-func (s *Server) renderJobsTable(tok string) string {
+func (s *Server) renderJobsTable(project int64) string {
 	jobs := s.readStatuses()
+	if project != 0 {
+		filtered := jobs[:0:0]
+		for _, st := range jobs {
+			if jobProjectID(st.Target) == project {
+				filtered = append(filtered, st)
+			}
+		}
+		jobs = filtered
+	}
 	var active, completed, attention int
 	for _, st := range jobs {
 		switch {
@@ -650,7 +733,7 @@ func (s *Server) renderJobsTable(tok string) string {
 	b.WriteString(`<section class="card border border-base-300 bg-base-100 shadow-xl"><div class="card-body p-0"><div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"><h2 class="font-semibold">Recent runs</h2><span class="badge badge-info badge-outline"><span class="status status-info"></span> streaming</span></div><div class="overflow-x-auto"><table class="table table-zebra"><thead><tr><th>State</th><th>Job</th><th class="hidden md:table-cell">Repo</th><th class="hidden lg:table-cell">Started</th><th class="hidden lg:table-cell">Finished</th><th>Links</th></tr></thead><tbody>`)
 	for _, st := range jobs {
 		stateLabel, badgeClass := statusPresentation(st.State)
-		b.WriteString(`<tr><td><span class="badge ` + badgeClass + ` badge-outline gap-1"><span class="status ` + statusDotClass(st.State) + `"></span>` + html.EscapeString(stateLabel) + `</span></td><td><a class="link link-primary font-mono font-semibold" href="/ops/jobs/` + html.EscapeString(st.ID) + tok + `">` + html.EscapeString(st.ID) + `</a><br><span class="text-xs opacity-60">` + html.EscapeString(st.Agent) + ` · event ` + strconv.FormatInt(st.EventID, 10) + ` · attempt ` + strconv.Itoa(st.Attempt) + `</span>` +
+		b.WriteString(`<tr><td><span class="badge ` + badgeClass + ` badge-outline gap-1"><span class="status ` + statusDotClass(st.State) + `"></span>` + html.EscapeString(stateLabel) + `</span></td><td><a class="link link-primary font-mono font-semibold" href="/ops/jobs/` + html.EscapeString(st.ID) + `">` + html.EscapeString(st.ID) + `</a><br><span class="text-xs opacity-60">` + html.EscapeString(st.Agent) + ` · event ` + strconv.FormatInt(st.EventID, 10) + ` · attempt ` + strconv.Itoa(st.Attempt) + `</span>` +
 			// Narrow screens drop the columns below; fold their content in here
 			// so nothing is lost when they are hidden.
 			`<span class="mt-1 block text-xs opacity-70 md:hidden">` + html.EscapeString(emptyDash(st.Repo)) + ` · <span class="font-mono">` + html.EscapeString(emptyDash(st.Branch)) + `</span></span>` +
@@ -663,10 +746,10 @@ func (s *Server) renderJobsTable(tok string) string {
 			b.WriteString(`<a class="btn join-item btn-xs btn-primary" target="_blank" rel="noopener noreferrer" href="` + html.EscapeString(st.PRURL) + `">PR</a>`)
 		}
 		if st.State == "failed" || st.State == "stopped" {
-			b.WriteString(`<button class="btn join-item btn-xs btn-warning" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/restart` + tok + `')">Restart</button>`)
+			b.WriteString(`<button class="btn join-item btn-xs btn-warning" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/restart` + projectQuery(project) + `')">Restart</button>`)
 		}
 		if isCancellableJobState(st.State) {
-			b.WriteString(`<button class="btn join-item btn-xs btn-outline btn-error" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/cancel` + tok + `')">Cancel</button>`)
+			b.WriteString(`<button class="btn join-item btn-xs btn-outline btn-error" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/cancel` + projectQuery(project) + `')">Cancel</button>`)
 		}
 		b.WriteString(`</div></td></tr>`)
 	}
@@ -674,7 +757,7 @@ func (s *Server) renderJobsTable(tok string) string {
 	return b.String()
 }
 
-func (s *Server) renderJobDetail(id, tok string) string {
+func (s *Server) renderJobDetail(id string) string {
 	st, err := s.readStatus(id)
 	if err != nil {
 		return `<p>Job not found.</p>`
@@ -684,12 +767,12 @@ func (s *Server) renderJobDetail(id, tok string) string {
 	var b strings.Builder
 	b.WriteString(`<section id="job-detail" class="space-y-5"><div class="card border border-base-300 bg-base-100 shadow-xl"><div class="card-body"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="mb-2 inline-flex items-center gap-2 rounded-full bg-base-200 px-3 py-1 text-xs uppercase tracking-[0.2em] opacity-80">` + html.EscapeString(st.Agent) + ` agent</div><h1 class="card-title font-mono break-all text-xl md:text-2xl">` + html.EscapeString(st.ID) + `</h1><p class="text-sm opacity-70">event ` + strconv.FormatInt(st.EventID, 10) + ` · attempt ` + strconv.Itoa(st.Attempt) + ` · pgid ` + strconv.Itoa(st.PGID) + `</p></div><span class="badge ` + badgeClass + ` badge-outline gap-1"><span class="status ` + statusDotClass(st.State) + `"></span>` + html.EscapeString(stateLabel) + `</span></div><div class="card-actions mt-4">`)
 	if isActiveJobState(st.State) {
-		b.WriteString(`<button class="btn btn-error btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/stop` + tok + `')">Stop job</button>`)
+		b.WriteString(`<button class="btn btn-error btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/stop` + `')">Stop job</button>`)
 	} else if st.State == "failed" || st.State == "stopped" {
-		b.WriteString(`<button class="btn btn-warning btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/restart` + tok + `')">Restart as fresh attempt</button>`)
+		b.WriteString(`<button class="btn btn-warning btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/restart` + `')">Restart as fresh attempt</button>`)
 	}
 	if isCancellableJobState(st.State) {
-		b.WriteString(`<button class="btn btn-outline btn-error btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/cancel` + tok + `')">Cancel</button>`)
+		b.WriteString(`<button class="btn btn-outline btn-error btn-sm" data-on:click="@post('/ops/jobs/` + html.EscapeString(st.ID) + `/cancel` + `')">Cancel</button>`)
 	}
 	if st.Target != "" {
 		b.WriteString(`<a class="btn btn-outline btn-sm" target="_blank" rel="noopener noreferrer" href="` + html.EscapeString(basecampAppURL(st.Target)) + `">Basecamp trigger</a>`)
@@ -748,19 +831,6 @@ func tailFile(path string, max int64) string {
 	return string(b)
 }
 
-func tokenQuery(r *http.Request) string {
-	if t := r.URL.Query().Get("token"); t != "" {
-		return "?token=" + html.EscapeString(t)
-	}
-	return ""
-}
-
-func tokenAmp(r *http.Request) string {
-	if t := r.URL.Query().Get("token"); t != "" {
-		return "&token=" + html.EscapeString(t)
-	}
-	return ""
-}
 func outputPanelJS() string {
 	return `(()=>{let panel=null;let outputObserver=null;let following=true;const nearBottom=el=>el.scrollHeight-el.scrollTop-el.clientHeight<32;const scrollToBottom=()=>{if(panel&&following)requestAnimationFrame(()=>{if(panel&&following)panel.scrollTop=panel.scrollHeight})};const bind=()=>{const next=document.getElementById('job-output');if(next===panel)return;if(outputObserver)outputObserver.disconnect();panel=next;if(!panel)return;panel.addEventListener('scroll',()=>{following=nearBottom(panel)},{passive:true});outputObserver=new MutationObserver(scrollToBottom);outputObserver.observe(panel,{childList:true,subtree:true,characterData:true});scrollToBottom()};new MutationObserver(bind).observe(document.body,{childList:true,subtree:true});bind();window.copyJobOutput=async button=>{const text=document.getElementById('job-output')?.textContent||'';try{await navigator.clipboard.writeText(text)}catch(_){const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}const old=button.textContent;button.textContent='Copied';setTimeout(()=>{button.textContent=old},1200)}})();`
 }
@@ -816,4 +886,50 @@ func emptyDash(value string) string {
 		return "—"
 	}
 	return value
+}
+
+var bucketIDPattern = regexp.MustCompile(`/buckets/(\d+)/`)
+
+// jobProjectID returns the Basecamp project a job belongs to, read from its
+// target recording URL, or 0 when the target has none.
+func jobProjectID(target string) int64 {
+	m := bucketIDPattern.FindStringSubmatch(target)
+	if m == nil {
+		return 0
+	}
+	id, _ := strconv.ParseInt(m[1], 10, 64)
+	return id
+}
+
+// opsProjectParam reads the ?project= filter that project pages pass to their
+// stream and actions.
+func opsProjectParam(r *http.Request) int64 {
+	id, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
+	return id
+}
+
+func projectQuery(project int64) string {
+	if project == 0 {
+		return ""
+	}
+	return "?project=" + strconv.FormatInt(project, 10)
+}
+
+// opsProjectNav links the all-jobs page to each configured project's page.
+func (s *Server) opsProjectNav() string {
+	if len(s.cfg.AllowedProjectIDs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<nav class="mt-1 flex flex-wrap gap-3 text-sm">`)
+	for _, project := range s.cfg.AllowedProjectIDs {
+		id := strconv.FormatInt(project, 10)
+		label := "Project " + id
+		if repo := s.cfg.ProjectRepos[id]; repo != "" {
+			label += " · " + repo
+		}
+		b.WriteString(`<a class="link link-primary" href="/ops/projects/` + id + `">` + html.EscapeString(label) + `</a>`)
+	}
+	b.WriteString(`</nav>`)
+	return b.String()
 }

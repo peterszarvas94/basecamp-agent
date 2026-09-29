@@ -15,8 +15,9 @@ curl -fsSL https://raw.githubusercontent.com/peterszarvas94/basecamp-agent/maste
 ```
 
 The installer starts an interactive setup that asks which bots, Basecamp
-projects, and local repositories to use. It also installs a systemd user service
-and gives the agent a public webhook URL (see below).
+projects, and local repositories to use. It also installs a systemd user service,
+registers webhooks for the public URL (see below), and creates any card columns
+the agent moves cards through.
 
 Or install the CLI directly with Go:
 
@@ -90,6 +91,27 @@ If you do not have a domain, a tunnel can provide a permanent URL. Some options:
   is early beta software.
 - A reverse proxy such as Caddy or nginx on a server and domain you control.
 
+## Ops dashboard
+
+The job dashboard is served at `<public-url>/ops`. Protect it with a token:
+
+```sh
+basecamp-agent config secret generate ops-token
+basecamp-agent service restart
+```
+
+Print ready-to-open links, one for all jobs and one per Basecamp project:
+
+```sh
+basecamp-agent ops url
+basecamp-agent ops url --project 456
+```
+
+Each project has its own page at `<public-url>/ops/projects/<project-id>`.
+Opening a link with `?token=` stores a session cookie and redirects to the same
+page without the token, so it does not stay in your browser history or links. Scripts can send `Authorization: Bearer <token>` instead. Rotate the
+token with `--force` to end all sessions.
+
 Railway operations deliberately delegate to the official Railway CLI rather
 than requiring an MCP connection:
 
@@ -103,12 +125,17 @@ basecamp-agent railway status
 ## Common commands
 
 ```sh
+# Show everything configured
+basecamp-agent list
+
 # Run directly
 basecamp-agent serve
 
 # Add another repository or project
 basecamp-agent github repo add ~/Projects/my-app
-basecamp-agent basecamp project add --account 123 --project 456 --creator 789 --default-repo my-app
+basecamp-agent project add --account 123 --project 456 --creator 789 --default-repo my-app
+basecamp-agent project list
+basecamp-agent project columns 456   # create missing card columns
 
 # Reconcile webhooks after changing configuration
 basecamp-agent basecamp webhook sync

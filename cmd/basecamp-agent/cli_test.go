@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func TestConfigAndComposableSetupCommands(t *testing.T) {
 	if _, err := runCLIForTest(t, config, "agent", "enable", "codex", "--person-id", "42", "--profile", "codex-bot"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLIForTest(t, config, "basecamp", "project", "add", "--account", "1", "--project", "2", "--creator", "3"); err != nil {
+	if _, err := runCLIForTest(t, config, "project", "add", "--account", "1", "--project", "2", "--creator", "3", "--no-sync"); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := loadConfig(config)
@@ -41,7 +42,7 @@ func TestConfigAndComposableSetupCommands(t *testing.T) {
 	if cfg.AllowedAccountID != 1 || len(cfg.AllowedProjectIDs) != 1 || cfg.AllowedProjectIDs[0] != 2 {
 		t.Fatalf("unexpected project config: %+v", cfg)
 	}
-	if _, err := runCLIForTest(t, config, "basecamp", "project", "add", "--account", "1", "--project", "2", "--creator", "3"); err != nil {
+	if _, err := runCLIForTest(t, config, "project", "add", "--account", "1", "--project", "2", "--creator", "3", "--no-sync"); err != nil {
 		t.Fatal(err)
 	}
 	cfg, _ = loadConfig(config)
@@ -69,7 +70,7 @@ func TestConfigShowRedactsSecrets(t *testing.T) {
 
 func TestNestedCommandHelp(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "config.json")
-	for _, args := range [][]string{{"install", "--help"}, {"dependencies", "check", "--help"}, {"github", "repo", "add", "--help"}, {"github", "repo", "create", "--help"}, {"railway", "deploy", "--help"}, {"basecamp", "project", "add", "--help"}} {
+	for _, args := range [][]string{{"install", "--help"}, {"dependencies", "check", "--help"}, {"github", "repo", "add", "--help"}, {"github", "repo", "create", "--help"}, {"railway", "deploy", "--help"}, {"project", "add", "--help"}} {
 		if _, err := runCLIForTest(t, config, args...); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
@@ -136,6 +137,16 @@ func TestNonInteractiveSetupConfiguresRepository(t *testing.T) {
 	cfg, _ = loadConfig(config)
 	if len(cfg.AllowedRepos) != 1 || len(cfg.AllowedProjectIDs) != 1 {
 		t.Fatalf("setup is not idempotent: %+v", cfg)
+	}
+	if aliases := cfg.AllowedRepos[0].Aliases; len(aliases) != 1 || aliases[0] != "dispatcher" {
+		t.Fatalf("rerunning setup without --repo-alias dropped aliases: %v", aliases)
+	}
+	if _, err := runCLIForTest(t, config, "github", "repo", "add", repo, "--name", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadConfig(config)
+	if aliases := cfg.AllowedRepos[0].Aliases; len(aliases) != 1 {
+		t.Fatalf("repo add without --alias dropped aliases: %v", aliases)
 	}
 }
 
@@ -270,11 +281,11 @@ func TestRepoAndProjectListsAreHumanReadable(t *testing.T) {
 			t.Fatalf("repository output does not contain %q:\n%s", want, repos)
 		}
 	}
-	projects, err := runCLIForTest(t, config, "basecamp", "project", "list")
+	projects, err := runCLIForTest(t, config, "project", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Basecamp account: 10", "Projects:", "20", "Default repository: app"} {
+	for _, want := range []string{"Project 20", "Repository: app", "Basecamp:   https://app.basecamp.com/10/projects/20"} {
 		if !strings.Contains(projects, want) {
 			t.Fatalf("project output does not contain %q:\n%s", want, projects)
 		}
@@ -370,5 +381,29 @@ func TestDryRunCommandsAreReadableAndDoNotMutateConfig(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("dry-run command changed the configuration file")
+	}
+}
+
+func TestListShowsEverythingConfigured(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	cfg := defaultConfig()
+	cfg.AllowedAccountID = 10
+	cfg.AllowedProjectIDs = []int64{20}
+	cfg.AllowedCreatorIDs = []int64{30}
+	cfg.ProjectRepos = map[string]string{"20": "app"}
+	cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: "/srv/app"}}
+	cfg.BotIDs = map[string]int64{"codex": 40}
+	cfg.BotProfiles = map[string]string{"codex": "codex-bot"}
+	if err := writeConfig(config, cfg, false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIForTest(t, config, "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Public URL: not set", "Requesters: 30", "Projects (account 10):", "Project 20", "Repository: app", "Configured repositories:", "Path: /srv/app", "Enabled agents:", "Basecamp profile: codex-bot"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("list output does not contain %q:\n%s", want, out)
+		}
 	}
 }

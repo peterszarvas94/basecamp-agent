@@ -73,7 +73,7 @@ func newRootCommand(opts *cliOptions) *cobra.Command {
 	root.Flags().Int64Var(&replayChat, "replay-chat-event", 0, "retry a verified chat event by ID")
 	root.Flags().Int64Var(&replayAssignment, "replay-todo-assignment", 0, "retry a verified todo assignment event by ID")
 
-	root.AddCommand(newServeCommand(opts), newSetupCommand(opts), newInstallCommand(opts), newDependenciesCommand(opts), newEndpointCommand(opts), newDoctorCommand(opts), newConfigCommand(opts), newAgentCommand(opts), newGitHubCommand(opts), newBasecampCommand(opts), newRailwayCommand(opts), newServiceCommand(opts))
+	root.AddCommand(newServeCommand(opts), newSetupCommand(opts), newInstallCommand(opts), newDependenciesCommand(opts), newEndpointCommand(opts), newOpsCommand(opts), newDoctorCommand(opts), newConfigCommand(opts), newAgentCommand(opts), newGitHubCommand(opts), newProjectCommand(opts), newBasecampCommand(opts), newListCommand(opts), newRailwayCommand(opts), newServiceCommand(opts))
 	return root
 }
 
@@ -500,32 +500,6 @@ func printRepos(opts *cliOptions, repos AllowedRepoList) error {
 	return nil
 }
 
-func printProjects(opts *cliOptions, cfg Config) error {
-	if opts.jsonOutput {
-		return printValue(opts, map[string]any{"account": cfg.AllowedAccountID, "projects": cfg.AllowedProjectIDs, "default_repos": cfg.ProjectRepos})
-	}
-	if _, err := fmt.Fprintf(opts.out, "Basecamp account: %d\n", cfg.AllowedAccountID); err != nil {
-		return err
-	}
-	if len(cfg.AllowedProjectIDs) == 0 {
-		_, err := fmt.Fprintln(opts.out, "No projects configured.")
-		return err
-	}
-	if _, err := fmt.Fprintln(opts.out, "Projects:"); err != nil {
-		return err
-	}
-	for _, id := range cfg.AllowedProjectIDs {
-		name := cfg.ProjectRepos[strconv.FormatInt(id, 10)]
-		if name == "" {
-			name = "(no default repository)"
-		}
-		if _, err := fmt.Fprintf(opts.out, "  %d\n    Default repository: %s\n", id, name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func printGitHubWebhookResults(opts *cliOptions, results []map[string]any, remove bool) error {
 	if opts.jsonOutput {
 		return printValue(opts, results)
@@ -822,6 +796,12 @@ func newGitHubCommand(opts *cliOptions) *cobra.Command {
 		if err := runInteractive(opts, "gh", ghArgs...); err != nil {
 			return fmt.Errorf("create GitHub repository: %w", err)
 		}
+		if push {
+			// Worktrees branch from origin/HEAD, which only a clone sets up.
+			if err := runInteractive(opts, "git", "-C", path, "remote", "set-head", "origin", "--auto"); err != nil {
+				return fmt.Errorf("set origin/HEAD: %w", err)
+			}
+		}
 		return addRepoConfig(opts, path, createName, createAliases)
 	}}
 	create.Flags().StringVar(&createName, "name", "", "GitHub and configured repository name")
@@ -877,7 +857,9 @@ func addRepoConfig(opts *cliOptions, path, name string, aliases []string) error 
 		if repo.Name == name || repo.Path == path {
 			cfg.AllowedRepos[i].Name = name
 			cfg.AllowedRepos[i].Path = path
-			cfg.AllowedRepos[i].Aliases = aliases
+			if len(aliases) > 0 {
+				cfg.AllowedRepos[i].Aliases = aliases
+			}
 			if err := writeConfig(opts.configPath, cfg, opts.dryRun, opts.out); err != nil {
 				return err
 			}
@@ -1183,7 +1165,7 @@ func randomSecret(bytesCount int) (string, error) {
 }
 
 func newBasecampCommand(opts *cliOptions) *cobra.Command {
-	cmd := &cobra.Command{Use: "basecamp", Short: "Manage Basecamp profiles, projects, and webhooks"}
+	cmd := &cobra.Command{Use: "basecamp", Short: "Manage Basecamp profiles and webhooks"}
 	var profile string
 	login := &cobra.Command{Use: "login", Short: "Create or authenticate a Basecamp CLI profile", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if opts.nonInteractive {
@@ -1197,58 +1179,6 @@ func newBasecampCommand(opts *cliOptions) *cobra.Command {
 	}}
 	login.Flags().StringVar(&profile, "profile", "", "profile name, such as codex-bot")
 	cmd.AddCommand(login)
-	var account, project, creator int64
-	var defaultRepo string
-	projectAdd := &cobra.Command{Use: "add", Short: "Allow a Basecamp project", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if account == 0 || project == 0 || creator == 0 {
-			return errors.New("--account, --project, and --creator are required")
-		}
-		cfg, err := readOrDefaultConfig(opts.configPath)
-		if err != nil {
-			return err
-		}
-		cfg.AllowedAccountID = account
-		cfg.AllowedProjectIDs = appendUniqueInt64(cfg.AllowedProjectIDs, project)
-		cfg.AllowedCreatorIDs = appendUniqueInt64(cfg.AllowedCreatorIDs, creator)
-		if cfg.ProjectRepos == nil {
-			cfg.ProjectRepos = map[string]string{}
-		}
-		if defaultRepo != "" {
-			cfg.ProjectRepos[strconv.FormatInt(project, 10)] = defaultRepo
-		}
-		return writeConfig(opts.configPath, cfg, opts.dryRun, opts.out)
-	}}
-	projectAdd.Flags().Int64Var(&account, "account", 0, "Basecamp account ID")
-	projectAdd.Flags().Int64Var(&project, "project", 0, "Basecamp project ID")
-	projectAdd.Flags().Int64Var(&creator, "creator", 0, "trusted requester person ID")
-	projectAdd.Flags().StringVar(&defaultRepo, "default-repo", "", "default repository name")
-	projects := &cobra.Command{Use: "project", Short: "Manage Basecamp projects"}
-	projects.AddCommand(projectAdd, &cobra.Command{Use: "list", Short: "List configured Basecamp projects", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg, err := readOrDefaultConfig(opts.configPath)
-		if err != nil {
-			return err
-		}
-		return printProjects(opts, cfg)
-	}}, &cobra.Command{Use: "remove <project-id>", Short: "Remove a Basecamp project", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		id, err := strconv.ParseInt(args[0], 10, 64)
-		if err != nil {
-			return err
-		}
-		cfg, err := readOrDefaultConfig(opts.configPath)
-		if err != nil {
-			return err
-		}
-		kept := cfg.AllowedProjectIDs[:0]
-		for _, projectID := range cfg.AllowedProjectIDs {
-			if projectID != id {
-				kept = append(kept, projectID)
-			}
-		}
-		cfg.AllowedProjectIDs = kept
-		delete(cfg.ProjectRepos, args[0])
-		return writeConfig(opts.configPath, cfg, opts.dryRun, opts.out)
-	}})
-	cmd.AddCommand(projects)
 	webhooks := &cobra.Command{Use: "webhook", Short: "Reconcile Basecamp project webhooks"}
 	webhooks.AddCommand(basecampWebhookCommand(opts, false), basecampWebhookCommand(opts, true))
 	cmd.AddCommand(webhooks)
@@ -1597,6 +1527,7 @@ func newSetupCommand(opts *cliOptions) *cobra.Command {
 		if err := promptPublicURL(cmd.Context(), opts, reader); err != nil {
 			return err
 		}
+		setupCardColumns(opts)
 		fmt.Fprintln(opts.out, "Setup complete. Run `basecamp-agent doctor` at any time to verify it.")
 		return nil
 	}}
@@ -1677,7 +1608,10 @@ func runConfiguredSetup(opts *cliOptions, setup setupOptions) error {
 			if repo.Name == setup.repoName || repo.Path == path {
 				cfg.AllowedRepos[i].Name = setup.repoName
 				cfg.AllowedRepos[i].Path = path
-				cfg.AllowedRepos[i].Aliases = setup.repoAliases
+				// Keep existing aliases unless new ones are given.
+				if len(setup.repoAliases) > 0 {
+					cfg.AllowedRepos[i].Aliases = setup.repoAliases
+				}
 				updated = true
 				break
 			}
@@ -1715,6 +1649,15 @@ func runConfiguredSetup(opts *cliOptions, setup setupOptions) error {
 		}
 	} else if setup.syncWebhooks {
 		if err := syncPublicWebhooks(opts, cfg, cfg.PublicURL, false); err != nil {
+			return err
+		}
+	}
+	if setup.syncWebhooks && setup.project != 0 && cfg.Cards.MoveEnabled {
+		results, err := ensureCardColumns(opts, cfg, setup.project)
+		if err != nil {
+			return fmt.Errorf("card columns: %w", err)
+		}
+		if err := printColumnResults(opts, setup.project, results); err != nil {
 			return err
 		}
 	}
