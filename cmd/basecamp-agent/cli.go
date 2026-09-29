@@ -1008,6 +1008,9 @@ func newRailwayCommand(opts *cliOptions) *cobra.Command {
 		if err := writeConfig(opts.configPath, cfg, false, opts.out); err != nil {
 			return err
 		}
+		if err := connectRailwayGitHub(opts, cfg.AllowedRepos[repoIndex], true); err != nil {
+			_, _ = fmt.Fprintf(opts.errOut, "warning: %v\nRun `basecamp-agent railway connect %s` to retry.\n", err, cfg.AllowedRepos[repoIndex].Path)
+		}
 		return printValue(opts, map[string]any{"repo": cfg.AllowedRepos[repoIndex].Name, "railway": created})
 	}}
 	deploy.Flags().BoolVar(&newProject, "new", false, "create a new Railway project and service")
@@ -1047,6 +1050,27 @@ func newRailwayCommand(opts *cliOptions) *cobra.Command {
 	domain.Flags().StringVar(&domainEnvironment, "environment", "", "Railway environment name or ID")
 	domain.Flags().StringVar(&domainProject, "project", "", "Railway project ID")
 	cmd.AddCommand(domain)
+	var noPREnvironments bool
+	connect := &cobra.Command{Use: "connect [folder]", Short: "Deploy a repository's Railway service from GitHub, with PR environments", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		folder := ""
+		if len(args) == 1 {
+			folder = args[0]
+		}
+		cfg, err := loadConfig(opts.configPath)
+		if err != nil {
+			return err
+		}
+		_, repo, err := resolveConfiguredRepo(cfg, folder)
+		if err != nil {
+			return err
+		}
+		if err := connectRailwayGitHub(opts, repo, !noPREnvironments); err != nil {
+			return err
+		}
+		return printValue(opts, map[string]any{"ok": true, "repo": repo.Name, "pr_environments": !noPREnvironments})
+	}}
+	connect.Flags().BoolVar(&noPREnvironments, "no-pr-environments", false, "do not give pull requests their own Railway environment")
+	cmd.AddCommand(connect)
 	cmd.AddCommand(&cobra.Command{Use: "status", Short: "Show the linked Railway context", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		args := []string{"status"}
 		if opts.jsonOutput {
@@ -1823,4 +1847,34 @@ func parseRailwayStatus(b []byte) (RailwayRepoConfig, error) {
 		}
 	}
 	return ctx, nil
+}
+
+// connectRailwayGitHub makes a repository's Railway service deploy from its
+// GitHub repository's default branch and, with prEnvironments, gives every
+// pull request its own preview environment.
+func connectRailwayGitHub(opts *cliOptions, repo AllowedRepo, prEnvironments bool) error {
+	r := repo.Railway
+	if r.Project == "" || r.Service == "" || r.Environment == "" {
+		return fmt.Errorf("repository %s has no Railway project, service, and environment; run `basecamp-agent railway deploy %s --new` or `basecamp-agent railway configure`", repo.Name, repo.Path)
+	}
+	slug, err := githubSlug(repo.Path)
+	if err != nil {
+		return err
+	}
+	head, err := commandOutput("git", "-C", repo.Path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return fmt.Errorf("find the default branch: %w", err)
+	}
+	branch := strings.TrimPrefix(strings.TrimSpace(string(head)), "origin/")
+	if err := runInteractiveInDir(opts, repo.Path, "railway", "service", "source", "connect", "--repo", slug, "--branch", branch, "--service", r.Service, "--project", r.Project, "--environment", r.Environment); err != nil {
+		return fmt.Errorf("connect %s to Railway: %w", slug, err)
+	}
+	if !prEnvironments {
+		return nil
+	}
+	mutation := `mutation($id: String!) { projectUpdate(id: $id, input: {prDeploys: true}) { id prDeploys } }`
+	if err := runInteractiveInDir(opts, repo.Path, "railway", "api", mutation, "--raw-var", "id="+r.Project); err != nil {
+		return fmt.Errorf("enable Railway PR environments: %w", err)
+	}
+	return nil
 }

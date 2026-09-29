@@ -119,8 +119,14 @@ than requiring an MCP connection:
 basecamp-agent install railway
 basecamp-agent railway login
 basecamp-agent railway deploy . --new --name my-app
+basecamp-agent railway domain
 basecamp-agent railway status
 ```
+
+`deploy --new` creates the Railway project, stores it in the global config, and
+connects the service to the GitHub repository with PR environments, so every
+pull request the agent opens gets its own preview deployment. For an existing
+project, store it with `railway configure` and run `railway connect`.
 
 ## Common commands
 

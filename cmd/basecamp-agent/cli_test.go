@@ -421,3 +421,32 @@ func TestParseRailwayStatusReadsNewProject(t *testing.T) {
 		t.Fatal("two services are ambiguous and must not be guessed")
 	}
 }
+
+func TestRailwayConnectUsesGitHubSourceAndPREnvironments(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.AllowedRepos = AllowedRepoList{{Name: "agent", Path: repo, Railway: RailwayRepoConfig{Project: "p-1", Service: "web", Environment: "production"}}}
+	if err := writeConfig(config, cfg, false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIForTest(t, config, "--dry-run", "railway", "connect", repo)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"railway service source connect --repo peterszarvas94/basecamp-agent --branch master --service web --project p-1 --environment production", "prDeploys: true", "--raw-var id=p-1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output does not contain %q:\n%s", want, out)
+		}
+	}
+	cfg.AllowedRepos[0].Railway = RailwayRepoConfig{}
+	if err := writeConfig(config, cfg, false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIForTest(t, config, "--dry-run", "railway", "connect", repo); err == nil {
+		t.Fatal("connect without Railway context should fail")
+	}
+}
