@@ -19,6 +19,14 @@ The installer starts an interactive setup that asks which bots, Basecamp
 projects, and local repositories to use. It can also configure webhooks and a
 systemd user service.
 
+Or install the CLI directly with Go:
+
+```sh
+go install github.com/peterszarvas94/basecamp-webhook-agent/cmd/basecamp-webhook-agent@latest
+```
+
+The binary is written to `$(go env GOPATH)/bin` unless `GOBIN` is set.
+
 To rerun setup or verify an installation:
 
 ```sh
