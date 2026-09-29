@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -187,8 +188,252 @@ func printValue(opts *cliOptions, value any) error {
 	if opts.jsonOutput {
 		return json.NewEncoder(opts.out).Encode(value)
 	}
-	_, err := fmt.Fprintln(opts.out, value)
+	b, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	var normalized any
+	if err := json.Unmarshal(b, &normalized); err != nil {
+		return err
+	}
+	var output strings.Builder
+	writeHumanValue(&output, normalized, 0)
+	_, err = fmt.Fprint(opts.out, output.String())
 	return err
+}
+
+func writeHumanValue(out *strings.Builder, value any, indent int) {
+	padding := strings.Repeat("  ", indent)
+	switch v := value.(type) {
+	case map[string]any:
+		if len(v) == 0 {
+			fmt.Fprintf(out, "%s(none)\n", padding)
+			return
+		}
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			child := v[key]
+			if isHumanScalar(child) {
+				fmt.Fprintf(out, "%s%s: %s\n", padding, humanLabel(key), humanScalar(child))
+				continue
+			}
+			fmt.Fprintf(out, "%s%s:\n", padding, humanLabel(key))
+			writeHumanValue(out, child, indent+1)
+		}
+	case []any:
+		if len(v) == 0 {
+			fmt.Fprintf(out, "%s(none)\n", padding)
+			return
+		}
+		for _, child := range v {
+			if isHumanScalar(child) {
+				fmt.Fprintf(out, "%s- %s\n", padding, humanScalar(child))
+				continue
+			}
+			fmt.Fprintf(out, "%s-\n", padding)
+			writeHumanValue(out, child, indent+1)
+		}
+	default:
+		fmt.Fprintf(out, "%s%s\n", padding, humanScalar(v))
+	}
+}
+
+func isHumanScalar(value any) bool {
+	switch value.(type) {
+	case nil, string, bool, float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func humanLabel(value string) string {
+	value = strings.ReplaceAll(value, "_", " ")
+	if value == "" {
+		return value
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func humanScalar(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return "(none)"
+	case bool:
+		if v {
+			return "yes"
+		}
+		return "no"
+	case string:
+		if v == "" {
+			return "(none)"
+		}
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func printAgents(opts *cliOptions, cfg Config) error {
+	if opts.jsonOutput {
+		return printValue(opts, map[string]any{"bot_ids": cfg.BotIDs, "bot_profiles": cfg.BotProfiles})
+	}
+	names := make([]string, 0, len(cfg.BotIDs))
+	for name := range cfg.BotIDs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		_, err := fmt.Fprintln(opts.out, "No agents enabled.")
+		return err
+	}
+	if _, err := fmt.Fprintln(opts.out, "Enabled agents:"); err != nil {
+		return err
+	}
+	for _, name := range names {
+		profile := cfg.BotProfiles[name]
+		if profile == "" {
+			profile = "(not configured)"
+		}
+		if _, err := fmt.Fprintf(opts.out, "  %s\n    Person ID: %d\n    Basecamp profile: %s\n", humanLabel(name), cfg.BotIDs[name], profile); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printRepos(opts *cliOptions, repos AllowedRepoList) error {
+	if opts.jsonOutput {
+		return printValue(opts, repos)
+	}
+	if len(repos) == 0 {
+		_, err := fmt.Fprintln(opts.out, "No repositories configured.")
+		return err
+	}
+	if _, err := fmt.Fprintln(opts.out, "Configured repositories:"); err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		if _, err := fmt.Fprintf(opts.out, "  %s\n    Path: %s\n", repo.Name, repo.Path); err != nil {
+			return err
+		}
+		if len(repo.Aliases) > 0 {
+			if _, err := fmt.Fprintf(opts.out, "    Aliases: %s\n", strings.Join(repo.Aliases, ", ")); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func printProjects(opts *cliOptions, cfg Config) error {
+	if opts.jsonOutput {
+		return printValue(opts, map[string]any{"account": cfg.AllowedAccountID, "projects": cfg.AllowedProjectIDs, "default_repos": cfg.ProjectRepos})
+	}
+	if _, err := fmt.Fprintf(opts.out, "Basecamp account: %d\n", cfg.AllowedAccountID); err != nil {
+		return err
+	}
+	if len(cfg.AllowedProjectIDs) == 0 {
+		_, err := fmt.Fprintln(opts.out, "No projects configured.")
+		return err
+	}
+	if _, err := fmt.Fprintln(opts.out, "Projects:"); err != nil {
+		return err
+	}
+	for _, id := range cfg.AllowedProjectIDs {
+		name := cfg.ProjectRepos[strconv.FormatInt(id, 10)]
+		if name == "" {
+			name = "(no default repository)"
+		}
+		if _, err := fmt.Fprintf(opts.out, "  %d\n    Default repository: %s\n", id, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printGitHubWebhookResults(opts *cliOptions, results []map[string]any, remove bool) error {
+	if opts.jsonOutput {
+		return printValue(opts, results)
+	}
+	if len(results) == 0 {
+		_, err := fmt.Fprintln(opts.out, "No repositories configured.")
+		return err
+	}
+	if _, err := fmt.Fprintln(opts.out, "GitHub webhooks:"); err != nil {
+		return err
+	}
+	for _, result := range results {
+		repo, _ := result["repo"].(string)
+		changed, _ := result["changed"].(bool)
+		status := "already configured"
+		if remove {
+			status = "not found"
+		}
+		if changed {
+			if opts.dryRun && remove {
+				status = "would remove"
+			} else if opts.dryRun {
+				status = "would sync"
+			} else if remove {
+				status = "removed"
+			} else {
+				status = "synced"
+			}
+		}
+		if _, err := fmt.Fprintf(opts.out, "  %s: %s\n", repo, status); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printChecks(opts *cliOptions, checks map[string]any) error {
+	if opts.jsonOutput {
+		return printValue(opts, checks)
+	}
+	labels := map[string]string{"basecamp": "Basecamp CLI", "claude": "Claude CLI", "codex": "Codex CLI", "config": "Config file", "configuration": "Configuration", "gh": "GitHub CLI", "git": "Git"}
+	keys := make([]string, 0, len(checks))
+	for key := range checks {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if _, err := fmt.Fprintln(opts.out, "Checks:"); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		label := labels[key]
+		if label == "" {
+			label = humanLabel(key)
+		}
+		values, _ := checks[key].(map[string]any)
+		ok, _ := values["ok"].(bool)
+		detail, _ := values["path"].(string)
+		if message, _ := values["error"].(string); message != "" {
+			detail = message
+		}
+		mark := "✓"
+		if !ok {
+			mark = "✗"
+			if detail == "" {
+				detail = "not available"
+			}
+		}
+		if detail == "" {
+			if _, err := fmt.Fprintf(opts.out, "  %s %s\n", mark, label); err != nil {
+				return err
+			}
+		} else if _, err := fmt.Fprintf(opts.out, "  %s %s: %s\n", mark, label, detail); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newConfigCommand(opts *cliOptions) *cobra.Command {
@@ -229,7 +474,11 @@ func newConfigCommand(opts *cliOptions) *cobra.Command {
 		if err := validateConfig(cfg); err != nil {
 			return err
 		}
-		return printValue(opts, map[string]any{"ok": true, "config": opts.configPath})
+		if opts.jsonOutput {
+			return printValue(opts, map[string]any{"ok": true, "config": opts.configPath})
+		}
+		_, err = fmt.Fprintf(opts.out, "Configuration is valid: %s\n", opts.configPath)
+		return err
 	}}
 	set := &cobra.Command{Use: "set <key> <value>", Short: "Set a scalar configuration value", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := readOrDefaultConfig(opts.configPath)
@@ -261,7 +510,7 @@ func newAgentCommand(opts *cliOptions) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return printValue(opts, map[string]any{"bot_ids": cfg.BotIDs, "bot_profiles": cfg.BotProfiles})
+		return printAgents(opts, cfg)
 	}})
 	for _, action := range []string{"enable", "disable"} {
 		action := action
@@ -370,7 +619,7 @@ func newGitHubCommand(opts *cliOptions) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return printValue(opts, cfg.AllowedRepos)
+		return printRepos(opts, cfg.AllowedRepos)
 	}}, &cobra.Command{Use: "remove <name>", Short: "Remove a repository from the allowlist", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := readOrDefaultConfig(opts.configPath)
 		if err != nil {
@@ -435,7 +684,7 @@ func githubWebhookCommand(opts *cliOptions, remove bool) *cobra.Command {
 			}
 			results = append(results, map[string]any{"repo": slug, "changed": changed})
 		}
-		return printValue(opts, results)
+		return printGitHubWebhookResults(opts, results, remove)
 	}}
 	cmd.Flags().StringVar(&callback, "url", "", "public callback URL")
 	return cmd
@@ -550,7 +799,7 @@ func newBasecampCommand(opts *cliOptions) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return printValue(opts, map[string]any{"account": cfg.AllowedAccountID, "projects": cfg.AllowedProjectIDs, "default_repos": cfg.ProjectRepos})
+		return printProjects(opts, cfg)
 	}}, &cobra.Command{Use: "remove <project-id>", Short: "Remove a Basecamp project", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := strconv.ParseInt(args[0], 10, 64)
 		if err != nil {
@@ -614,7 +863,19 @@ func basecampWebhookCommand(opts *cliOptions, remove bool) *cobra.Command {
 				return err
 			}
 		}
-		return printValue(opts, map[string]any{"ok": true, "projects": len(cfg.AllowedProjectIDs), "removed": remove})
+		if opts.jsonOutput {
+			return printValue(opts, map[string]any{"ok": true, "projects": len(cfg.AllowedProjectIDs), "removed": remove})
+		}
+		action := "synced"
+		if opts.dryRun && remove {
+			action = "would be removed from"
+		} else if opts.dryRun {
+			action = "would be synced for"
+		} else if remove {
+			action = "removed from"
+		}
+		_, err = fmt.Fprintf(opts.out, "Basecamp webhook %s %d project(s).\n", action, len(cfg.AllowedProjectIDs))
+		return err
 	}}
 	cmd.Flags().StringVar(&callback, "url", "", "public callback URL")
 	cmd.Flags().StringVar(&profile, "profile", "", "Basecamp CLI profile")
@@ -703,7 +964,7 @@ func newDoctorCommand(opts *cliOptions) *cobra.Command {
 			checks["configuration"] = map[string]any{"ok": configErr == nil, "error": errorString(configErr)}
 		}
 		failed = failed || configErr != nil
-		_ = printValue(opts, checks)
+		_ = printChecks(opts, checks)
 		if failed {
 			return errors.New("one or more checks failed")
 		}

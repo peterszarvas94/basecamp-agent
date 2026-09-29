@@ -92,3 +92,147 @@ func TestFindWebhookIDUsesBasecampPayloadURL(t *testing.T) {
 		t.Fatalf("findWebhookID = %d, want 123", got)
 	}
 }
+
+func TestAgentListIsHumanReadable(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	cfg := defaultConfig()
+	cfg.BotIDs = map[string]int64{"codex": 42, "claude": 41}
+	cfg.BotProfiles = map[string]string{"codex": "codex-bot", "claude": "claude-bot"}
+	if err := writeConfig(config, cfg, false, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIForTest(t, config, "agent", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Enabled agents:", "Claude", "Person ID: 41", "Basecamp profile: claude-bot", "Codex", "Person ID: 42"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output does not contain %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "map[") {
+		t.Fatalf("output contains Go map formatting:\n%s", out)
+	}
+}
+
+func TestRepoAndProjectListsAreHumanReadable(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	cfg := defaultConfig()
+	cfg.AllowedAccountID = 10
+	cfg.AllowedProjectIDs = []int64{20}
+	cfg.ProjectRepos = map[string]string{"20": "app"}
+	cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: "/srv/app", Aliases: []string{"api", "backend"}}}
+	if err := writeConfig(config, cfg, false, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	repos, err := runCLIForTest(t, config, "github", "repo", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Configured repositories:", "app", "Path: /srv/app", "Aliases: api, backend"} {
+		if !strings.Contains(repos, want) {
+			t.Fatalf("repository output does not contain %q:\n%s", want, repos)
+		}
+	}
+	projects, err := runCLIForTest(t, config, "basecamp", "project", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Basecamp account: 10", "Projects:", "20", "Default repository: app"} {
+		if !strings.Contains(projects, want) {
+			t.Fatalf("project output does not contain %q:\n%s", want, projects)
+		}
+	}
+}
+
+func TestHumanValueOutputNeverUsesGoMapFormatting(t *testing.T) {
+	var out bytes.Buffer
+	opts := &cliOptions{out: &out}
+	value := map[string]any{"ok": true, "checks": map[string]any{"git": map[string]any{"ok": true, "path": "/usr/bin/git"}}, "items": []any{map[string]any{"name": "app"}}}
+	if err := printValue(opts, value); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "map[") {
+		t.Fatalf("output contains Go map formatting:\n%s", out.String())
+	}
+	for _, want := range []string{"Checks:", "Git:", "Path: /usr/bin/git", "Ok: yes", "Name: app"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output does not contain %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestGitHubWebhookResultsAreHumanReadable(t *testing.T) {
+	var out bytes.Buffer
+	opts := &cliOptions{out: &out, dryRun: true}
+	results := []map[string]any{{"repo": "owner/app", "changed": true}}
+	if err := printGitHubWebhookResults(opts, results, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "GitHub webhooks:\n  owner/app: would sync\n" {
+		t.Fatalf("unexpected output:\n%s", got)
+	}
+}
+
+func TestDoctorChecksAreHumanReadable(t *testing.T) {
+	var out bytes.Buffer
+	opts := &cliOptions{out: &out}
+	checks := map[string]any{
+		"git":           map[string]any{"ok": true, "path": "/usr/bin/git"},
+		"configuration": map[string]any{"ok": true, "error": ""},
+		"gh":            map[string]any{"ok": false, "path": ""},
+	}
+	if err := printChecks(opts, checks); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Checks:", "✓ Git: /usr/bin/git", "✓ Configuration", "✗ GitHub CLI: not available"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output does not contain %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestDryRunCommandsAreReadableAndDoNotMutateConfig(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.PublicURL = "https://agent.example.test"
+	cfg.AllowedAccountID = 1
+	cfg.AllowedProjectIDs = []int64{2}
+	cfg.AllowedCreatorIDs = []int64{3}
+	cfg.BotIDs = map[string]int64{"codex": 4}
+	cfg.BotProfiles = map[string]string{"codex": "codex-bot"}
+	cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: repo}}
+	if err := writeConfig(config, cfg, false, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := [][]string{
+		{"--dry-run", "agent", "enable", "claude", "--person-id", "5"},
+		{"--dry-run", "basecamp", "webhook", "sync"},
+		{"--dry-run", "github", "webhook", "sync"},
+		{"--dry-run", "service", "install"},
+	}
+	for _, args := range commands {
+		out, err := runCLIForTest(t, config, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, "map[") {
+			t.Fatalf("%v produced Go map formatting:\n%s", args, out)
+		}
+	}
+	after, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("dry-run command changed the configuration file")
+	}
+}
