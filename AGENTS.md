@@ -122,6 +122,19 @@ sh -n install.sh
 git diff --check
 ```
 
+Before pushing any repository change:
+
+1. Install the current worktree build into the local binary path:
+   `GOBIN="$HOME/.local/bin" go install ./cmd/basecamp-webhook-agent`.
+2. Use that freshly installed binary for any setup or configuration operations
+   required by the change. At minimum, validate the existing external config
+   with `basecamp-webhook-agent config validate`.
+3. If the user service is active and runtime behavior changed, restart it and
+   verify that it remains active.
+4. Push only after installation and local validation succeed.
+
+Never replace the external live config with example data, and never stage it.
+
 In restricted environments, set `GOCACHE` to a writable directory such as
 `/tmp/basecamp-webhook-agent-gocache`.
 
