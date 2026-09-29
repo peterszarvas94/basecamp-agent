@@ -122,8 +122,11 @@ func TestOpsProjectPageShowsOnlyThatProject(t *testing.T) {
 		if rec.Code != want {
 			t.Fatalf("GET %s = %d, want %d", path, rec.Code, want)
 		}
-		if path == "/ops/projects/11" && (!strings.Contains(rec.Body.String(), "/ops/stream?project=11") || !strings.Contains(rec.Body.String(), "Project 11 · app")) {
+		if path == "/ops/projects/11" && (!strings.Contains(rec.Body.String(), "/ops/stream?project=11") || !strings.Contains(rec.Body.String(), "<h1 class=\"text-2xl font-bold tracking-tight md:text-3xl\">app</h1>")) {
 			t.Fatalf("project page does not stream its project or show its repo:\n%s", rec.Body.String())
+		}
+		if path == "/ops/projects/11" && (!strings.Contains(rec.Body.String(), `class="menu-active" href="/ops/projects/11"`) || !strings.Contains(rec.Body.String(), "1 job<")) {
+			t.Fatalf("project page does not highlight its tab with its job count:\n%s", rec.Body.String())
 		}
 		if path == "/ops" && !strings.Contains(rec.Body.String(), `href="/ops/projects/22"`) {
 			t.Fatalf("all-jobs page does not link to projects:\n%s", rec.Body.String())

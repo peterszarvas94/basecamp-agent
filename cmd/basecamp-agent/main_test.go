@@ -216,7 +216,7 @@ func TestCancelledJobIsTerminal(t *testing.T) {
 	if label != "cancelled" || badge != "badge-neutral" {
 		t.Errorf("statusPresentation(cancelled) = %q, %q", label, badge)
 	}
-	if dot := statusDotClass("cancelled"); dot != "status-neutral" {
+	if dot := statusDotClass("cancelled"); dot != "bg-neutral-content" {
 		t.Errorf("statusDotClass(cancelled) = %q", dot)
 	}
 	// A cancelled run must not pulse like something still working.
@@ -265,5 +265,14 @@ func TestOutputPanelScriptSupportsFollowAndCopy(t *testing.T) {
 		if !strings.Contains(js, required) {
 			t.Errorf("output panel script is missing %q", required)
 		}
+	}
+}
+
+func TestNeutralBadgesAreSolidSoTheyStayReadable(t *testing.T) {
+	if got := badgeStyle("badge-neutral"); got != "badge-neutral" {
+		t.Errorf("neutral badge = %q, want solid", got)
+	}
+	if got := badgeStyle("badge-success"); got != "badge-success badge-outline" {
+		t.Errorf("success badge = %q, want outlined", got)
 	}
 }
