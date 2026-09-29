@@ -1,0 +1,54 @@
+{
+  "listen": "127.0.0.1:8789",
+  "public_url": "https://agent.example.com",
+  "basecamp_bin": "basecamp",
+  "codex_bin": "codex",
+  "claude_bin": "claude",
+  "work_dir": "/home/USER/Projects",
+  "state_path": "/home/USER/.local/state/basecamp-webhook-agent/state.json",
+  "allowed_account_id": 123456,
+  "allowed_project_ids": [
+    123456
+  ],
+  "allowed_creator_ids": [
+    123456
+  ],
+  "bot_ids": {
+    "claude": 123456,
+    "codex": 123457
+  },
+  "bot_profiles": {
+    "claude": "claude-bot",
+    "codex": "codex-bot"
+  },
+  "allowed_repos": [
+    {
+      "name": "restaurant",
+      "path": "/home/USER/Projects/restaurant",
+      "aliases": [
+        "restaurant-app"
+      ]
+    }
+  ],
+  "project_repos": {
+    "123456": "restaurant"
+  },
+  "command_timeout_mins": 45,
+  "max_output_bytes": 12000,
+  "cards": {
+    "move_enabled": true,
+    "in_progress": "In progress",
+    "pr_open": "PR open",
+    "done": "Done",
+    "failed": "Figuring it out"
+  },
+  "github": {
+    "webhook_secret": "replace-with-a-long-random-secret"
+  },
+  "ops": {
+    "enabled": true,
+    "token": "change-me-or-leave-empty-on-tailscale-only",
+    "max_jobs": 200,
+    "log_tail_bytes": 200000
+  }
+}

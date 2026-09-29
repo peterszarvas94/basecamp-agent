@@ -1,0 +1,13 @@
+# Runtime state, local credentials, and machine-specific config
+config.json
+state.json
+*.log
+.env
+.env.*
+
+# Local builds
+/basecamp-webhook-agent
+*.test
+
+# Pi session exports
+pi-session-*.html

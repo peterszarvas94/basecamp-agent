@@ -1,0 +1,13 @@
+[Unit]
+Description=Basecamp webhook local coding agent dispatcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/basecamp-webhook-agent -config %h/.config/basecamp-webhook-agent/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
