@@ -646,6 +646,12 @@ func newConfigCommand(opts *cliOptions) *cobra.Command {
 			cfg.WorkDir = expandPath(args[1])
 		case "state_path":
 			cfg.StatePath = expandPath(args[1])
+		case "basecamp_bin":
+			cfg.BasecampBin = expandPath(args[1])
+		case "codex_bin":
+			cfg.CodexBin = expandPath(args[1])
+		case "claude_bin":
+			cfg.ClaudeBin = expandPath(args[1])
 		default:
 			return fmt.Errorf("unsupported scalar key %q", args[0])
 		}
