@@ -206,19 +206,6 @@ func jobID(job Job) string {
 	return fmt.Sprintf("%d-%s-retry-%d", job.Event.ID, job.Agent, job.Attempt)
 }
 
-func restartPrompt(job Job) string {
-	if job.PreviousJobID == "" {
-		return ""
-	}
-	return fmt.Sprintf(`Restart context:
-- This is a restarted job attempt.
-- Previous job id: %s
-- Previous status/log summary: %s
-Before acting, inspect the previous attempt's status, logs, and worktree if useful. Do not assume previous changes are correct. If you reuse anything, copy it deliberately into this fresh worktree.
-
-`, job.PreviousJobID, job.PreviousSummary)
-}
-
 func (s *Server) writeJobRecord(job Job) {
 	if job.JobDir == "" {
 		return

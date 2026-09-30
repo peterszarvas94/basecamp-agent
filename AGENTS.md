@@ -18,6 +18,9 @@ Claude CLIs. Its main pieces are:
 
 - `main.go`: configuration, Basecamp webhook verification, dispatch, worker
   execution, and HTTP server startup.
+- `prompts/*.md`: embedded model prompt templates. Keep model-facing prose in
+  these Markdown files rather than Go string literals; `prompts.go` supplies
+  typed template data and renders them.
 - `cli.go`: Cobra commands, setup, config mutation, webhook reconciliation,
   diagnostics, and systemd management.
 - `chat.go`: Campfire event-feed polling and replay.

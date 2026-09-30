@@ -128,6 +128,52 @@ func TestIntentDecisionParsingRequiresExactFinalLine(t *testing.T) {
 	}
 }
 
+func TestEmbeddedPromptsRenderModesAndDynamicContext(t *testing.T) {
+	intent, err := renderPrompt("INTENT_DETECTION.md", intentPromptData{
+		Repositories:      []promptRepository{{Name: "app", Aliases: []string{"web"}}},
+		DefaultRepository: "app",
+		Title:             "Change it",
+		Instruction:       "Please fix the header",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Intent detection", "`app` (aliases: web)", "BASECAMP_ASSISTANT", "Please fix the header"} {
+		if !strings.Contains(intent, want) {
+			t.Errorf("intent prompt missing %q", want)
+		}
+	}
+
+	worker, err := renderPrompt("AGENT_TASK.md", agentTaskPromptData{
+		ProjectID:    456,
+		Requester:    "Pat",
+		Target:       "https://3.basecampapi.com/123/buckets/456/todos/789.json",
+		ShareableURL: "https://app.basecamp.com/123/buckets/456/todos/789",
+		Mode:         "implementation",
+		Agent:        "codex",
+		Instruction:  "Fix it",
+		Repo:         "app",
+		Worktree:     "/tmp/worktree",
+		LocalBranch:  "run-1",
+		BaseBranch:   "master",
+		Upstream:     "origin/master",
+		Branch:       "bc-789",
+		ExistingPR:   "https://github.com/example/app/pull/1",
+		ChatRoom:     99,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Implementation mode", "project `456`", "room 99", "Fix it", "pull/1"} {
+		if !strings.Contains(worker, want) {
+			t.Errorf("worker prompt missing %q", want)
+		}
+	}
+	if strings.Contains(worker, "## Assistant mode") {
+		t.Error("implementation prompt included assistant mode")
+	}
+}
+
 func TestFailureMessageLeadsWithTheCause(t *testing.T) {
 	out := strings.Join([]string{
 		"Reading additional input from stdin...",
