@@ -66,6 +66,13 @@ credentials, bot passwords, or GitHub credentials here. Webhook secrets may be
 stored in the external config with mode `0600`. Never print secrets from
 `config show` or dry runs.
 
+Railway support is preview-only. It may connect an allowlisted repository to an
+existing Railway project and service and configure a persistent non-production
+environment as the base for agent-created PR environments. It must never deploy,
+redeploy, promote, roll back, expose domains for, or mutate production. The
+preview base defaults to `staging`, is stored as
+`preview_base_environment`, and must reject `production`.
+
 ## Configuration and repositories
 
 Live config defaults to `~/.config/basecamp-agent/config.json`; state

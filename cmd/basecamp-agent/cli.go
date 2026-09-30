@@ -497,10 +497,11 @@ func printRepos(opts *cliOptions, repos AllowedRepoList) error {
 			}
 		}
 		if r := repo.Railway; r.Project != "" {
-			line := "    Railway: " + r.Service + " (" + r.Environment + ")"
-			if r.Domain != "" {
-				line += " " + r.Domain
+			base := r.PreviewBaseEnvironment
+			if base == "" {
+				base = "staging"
 			}
+			line := "    Railway previews: " + r.Service + " (base: " + base + ")"
 			if _, err := fmt.Fprintln(opts.out, line); err != nil {
 				return err
 			}
@@ -887,7 +888,7 @@ func addRepoConfig(opts *cliOptions, path, name string, aliases []string) error 
 	return printValue(opts, map[string]any{"ok": true, "repo": name, "path": path})
 }
 
-func newRailwayCommand(opts *cliOptions) *cobra.Command {
+func newLegacyRailwayCommand(opts *cliOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "railway", Short: "Manage Railway through the Railway CLI"}
 	cmd.AddCommand(&cobra.Command{Use: "login", Short: "Authenticate or create a Railway account", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if opts.nonInteractive {

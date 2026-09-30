@@ -116,21 +116,28 @@ Opening a link with `?token=` stores a session cookie and redirects to the same
 page without the token, so it does not stay in your browser history or links. Scripts can send `Authorization: Bearer <token>` instead. Rotate the
 token with `--force` to end all sessions.
 
-Railway operations deliberately delegate to the official Railway CLI rather
-than requiring an MCP connection:
+Railway support is deliberately limited to safe preview environments for agent
+pull requests. It does not deploy or configure production. Point a configured
+repository at an existing Railway project and service; the preview base defaults
+to a persistent environment named `staging`, or choose another non-production
+name with `--base`:
 
 ```sh
 basecamp-agent install railway
 basecamp-agent railway login
-basecamp-agent railway deploy . --new --name my-app
-basecamp-agent railway domain
-basecamp-agent railway status
+basecamp-agent railway preview prepare . --project <project-id> --service <service>
+basecamp-agent railway preview setup . --confirm-safe-secrets
+basecamp-agent railway preview prepare . --project <project-id> --service <service> --base agent-staging
+basecamp-agent railway preview audit .
+basecamp-agent railway preview status .
 ```
 
-`deploy --new` creates the Railway project, stores it in the global config, and
-connects the service to the GitHub repository with PR environments, so every
-pull request the agent opens gets its own preview deployment. For an existing
-project, store it with `railway configure` and run `railway connect`.
+`preview prepare` first disables PR environments, then creates the persistent
+base by copying service topology from production without deploying it. Replace
+all inherited production credentials with staging or sandbox values before
+running `preview setup --confirm-safe-secrets`; setup then connects the GitHub
+source, selects that environment as the PR base, and enables bot PR previews.
+Both commands refuse `production` as the preview base.
 
 ## Common commands
 

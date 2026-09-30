@@ -27,7 +27,12 @@
       "path": "/home/USER/Projects/restaurant",
       "aliases": [
         "restaurant-app"
-      ]
+      ],
+      "railway": {
+        "project": "railway-project-id",
+        "service": "restaurant",
+        "preview_base_environment": "staging"
+      }
     }
   ],
   "project_repos": {

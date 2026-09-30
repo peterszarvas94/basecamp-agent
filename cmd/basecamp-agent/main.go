@@ -74,8 +74,11 @@ type AllowedRepo struct {
 }
 
 type RailwayRepoConfig struct {
-	Project     string `json:"project,omitempty"`
-	Service     string `json:"service,omitempty"`
+	Project                string `json:"project,omitempty"`
+	Service                string `json:"service,omitempty"`
+	PreviewBaseEnvironment string `json:"preview_base_environment,omitempty"`
+	// Legacy fields are read so existing configs remain loadable. The preview
+	// command surface never uses or writes them.
 	Environment string `json:"environment,omitempty"`
 	Domain      string `json:"domain,omitempty"`
 }
