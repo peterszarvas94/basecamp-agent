@@ -15,16 +15,10 @@ var prompts = template.Must(template.New("prompts").Funcs(template.FuncMap{
 	"join": strings.Join,
 }).ParseFS(promptFiles, "prompts/*.md"))
 
-type promptRepository struct {
-	Name    string
-	Aliases []string
-}
-
 type intentPromptData struct {
-	Repositories      []promptRepository
-	DefaultRepository string
-	Title             string
-	Instruction       string
+	Repository  string
+	Title       string
+	Instruction string
 }
 
 type agentTaskPromptData struct {

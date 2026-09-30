@@ -86,8 +86,8 @@ func matchesRepoTerm(clues, term string) bool {
 	return regexp.MustCompile(pattern).MatchString(clues)
 }
 
-// Only a single explicitly allowlisted repo may be selected. Unresolved jobs can
-// still answer Basecamp questions, but their prompt forbids source changes.
+// Only a single explicitly allowlisted repo may be selected. It returns an empty
+// repo when nothing matches; the dispatcher rejects such jobs.
 func (s *Server) selectRepo(job Job) (AllowedRepo, error) {
 	if job.Repo != "" {
 		return s.allowedRepoByName(job.Repo)

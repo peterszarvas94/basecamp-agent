@@ -130,15 +130,14 @@ func TestIntentDecisionParsingRequiresExactFinalLine(t *testing.T) {
 
 func TestEmbeddedPromptsRenderModesAndDynamicContext(t *testing.T) {
 	intent, err := renderPrompt("INTENT_DETECTION.md", intentPromptData{
-		Repositories:      []promptRepository{{Name: "app", Aliases: []string{"web"}}},
-		DefaultRepository: "app",
-		Title:             "Change it",
-		Instruction:       "Please fix the header",
+		Repository:  "app",
+		Title:       "Change it",
+		Instruction: "Please fix the header",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# Intent detection", "`app` (aliases: web)", "BASECAMP_ASSISTANT", "Please fix the header"} {
+	for _, want := range []string{"# Intent detection", "selected the repository for this request: `app`", "BASECAMP_IMPLEMENTATION: app", "BASECAMP_ASSISTANT", "Please fix the header"} {
 		if !strings.Contains(intent, want) {
 			t.Errorf("intent prompt missing %q", want)
 		}

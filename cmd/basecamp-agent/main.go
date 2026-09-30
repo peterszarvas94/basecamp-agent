@@ -668,11 +668,21 @@ func (s *Server) executeJob(job Job) {
 	s.writeJobRecord(job)
 	log.Printf("running event=%d agent=%s target=%s", job.Event.ID, job.Agent, job.Target)
 	s.writeJobStatus(job, "preparing", 0, "", "")
-	var out, prURL string
-	decision, err := s.detectIntent(job)
+	var out, prURL, decision string
+	// Every job runs inside one repository, so it is chosen before anything
+	// else. Both modes then work from it: the intent pass and assistant work in
+	// its checkout, implementation in a fresh worktree.
+	repo, err := s.selectRepo(job)
+	if err == nil && repo.Name == "" {
+		err = errors.New("no repository matched this request; name an allowlisted repository or set a project default")
+	}
 	if err == nil {
-		if repo, ok := implementationRequest(decision); ok {
-			job.Mode, job.Repo = "implementation", repo
+		job.Repo = repo.Name
+		decision, err = s.detectIntent(job, repo)
+	}
+	if err == nil {
+		if name, ok := implementationRequest(decision); ok && name == repo.Name {
+			job.Mode = "implementation"
 		} else if assistantRequest(decision) {
 			job.Mode = "assistant"
 		} else {
@@ -784,16 +794,12 @@ func assistantRequest(out string) bool {
 // workflow but cannot carry out the request; the full worker runs afterwards.
 // These economical defaults can become configuration once mode-specific model
 // selection is exposed by the CLI.
-func (s *Server) detectIntent(job Job) (string, error) {
-	data := intentPromptData{
-		DefaultRepository: s.cfg.ProjectRepos[strconv.FormatInt(job.Event.Recording.Bucket.ID, 10)],
-		Title:             job.Title,
-		Instruction:       job.Instruction,
-	}
-	for _, repo := range s.cfg.AllowedRepos {
-		data.Repositories = append(data.Repositories, promptRepository{Name: repo.Name, Aliases: repo.Aliases})
-	}
-	prompt, err := renderPrompt("INTENT_DETECTION.md", data)
+func (s *Server) detectIntent(job Job, repo AllowedRepo) (string, error) {
+	prompt, err := renderPrompt("INTENT_DETECTION.md", intentPromptData{
+		Repository:  repo.Name,
+		Title:       job.Title,
+		Instruction: job.Instruction,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -811,12 +817,12 @@ func (s *Server) detectIntent(job Job) (string, error) {
 		finalPath = f.Name()
 		_ = f.Close()
 		defer os.Remove(finalPath)
-		cmd = exec.CommandContext(ctx, s.cfg.CodexBin, "exec", "--model", "gpt-6-luna", "--sandbox", "read-only", "--ephemeral", "--cd", s.cfg.WorkDir, "--output-last-message", finalPath, prompt)
+		cmd = exec.CommandContext(ctx, s.cfg.CodexBin, "exec", "--model", "gpt-6-luna", "--sandbox", "read-only", "--ephemeral", "--cd", repo.Path, "--output-last-message", finalPath, prompt)
 	} else {
 		cmd = exec.CommandContext(ctx, s.cfg.ClaudeBin, "--print", "--model", "sonnet", "--permission-mode", "dontAsk")
 		cmd.Stdin = strings.NewReader(prompt)
 	}
-	cmd.Dir = s.cfg.WorkDir
+	cmd.Dir = repo.Path
 	cmd.Env = append(os.Environ(), "BASECAMP_NONINTERACTIVE=1", "BASECAMP_PROFILE="+job.Profile)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
@@ -946,9 +952,13 @@ func failureMessage(job Job, state, reason, out string) string {
 func (s *Server) runAgent(job Job) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.CommandTimeoutMins)*time.Minute)
 	defer cancel()
-	workDir := s.cfg.WorkDir
-	if job.Worktree != "" {
-		workDir = job.Worktree
+	workDir := job.Worktree
+	if workDir == "" {
+		repo, err := s.allowedRepoByName(job.Repo)
+		if err != nil {
+			return "", err
+		}
+		workDir = repo.Path
 	}
 	data := agentTaskPromptData{
 		ProjectID:        job.Event.Recording.Bucket.ID,

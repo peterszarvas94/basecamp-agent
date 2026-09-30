@@ -9,12 +9,14 @@ developer-facing detail here.
 The service accepts trusted Basecamp work and dispatches it to local Codex or
 Claude CLIs. Its main pieces are:
 
-- A tool-free intent pass routes each request to assistant or implementation
-  mode. Assistant mode may answer and perform project-scoped Basecamp work but
-  never touches repositories or the automatic card lifecycle. Implementation
-  mode requires exactly one allowlisted repository and uses the full worktree,
-  PR, and card workflow. Intent models are deliberately economical; making
-  mode-specific models configurable is future work.
+- Every job first selects exactly one allowlisted repository (see below); a
+  job with no match fails. A tool-free intent pass then runs in that
+  repository's checkout and routes the request to assistant or implementation
+  mode. Assistant mode runs in the same checkout, may read it for context, and
+  may perform project-scoped Basecamp work, but never edits, commits, or pushes
+  and stays out of the automatic card lifecycle. Implementation mode uses the
+  full worktree, PR, and card workflow. Intent models are deliberately
+  economical; making mode-specific models configurable is future work.
 
 - `main.go`: configuration, Basecamp webhook verification, dispatch, worker
   execution, and HTTP server startup.
@@ -82,7 +84,8 @@ defaults to `~/.local/state/basecamp-agent/state.json`.
 `allowed_repos` entries contain `name`, `path`, and optional `aliases`.
 String-only entries are rejected. A job selects exactly one repo by matching
 its name, path basename, or alias in the Basecamp item or parent title.
-`project_repos` supplies a default. Ambiguous jobs must fail instead of guessing.
+`project_repos` supplies a default. Ambiguous or unmatched jobs must fail instead
+of guessing.
 
 Work runs in `worktree_root/<repo>/<agent>/bc-<event-id>` from `origin/HEAD`.
 The dispatcher verifies the branch and clean status, pushes only the feature

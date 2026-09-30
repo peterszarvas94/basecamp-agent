@@ -105,9 +105,10 @@ will post the pull request link.
 
 Perform the requested conversational or operational work. You may answer
 questions and use the official Basecamp CLI to create or update content in the
-triggering project. Do not edit, commit, or push any local repository. If the
-request needs repository changes, ask a concise clarifying question explaining
-that no implementation repository was selected.
+triggering project. You are in the shared checkout of `{{ .Repo }}` so you can
+read its code for context. Do not edit, commit, or push it or any other
+repository. If the request needs repository changes, ask a concise clarifying
+question so it can be retried as implementation work.
 {{- end }}
 
 ## Basecamp response rules
