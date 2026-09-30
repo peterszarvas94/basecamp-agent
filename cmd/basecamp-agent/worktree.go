@@ -89,6 +89,9 @@ func matchesRepoTerm(clues, term string) bool {
 // Only a single explicitly allowlisted repo may be selected. Unresolved jobs can
 // still answer Basecamp questions, but their prompt forbids source changes.
 func (s *Server) selectRepo(job Job) (AllowedRepo, error) {
+	if job.Repo != "" {
+		return s.allowedRepoByName(job.Repo)
+	}
 	clues := job.Instruction + "\n" + job.Title
 	repos, err := s.normalizedAllowedRepos()
 	if err != nil {

@@ -3,7 +3,9 @@
 Run Codex or Claude from trusted Basecamp mentions and assignments. Code jobs
 use isolated Git worktrees, push a feature branch, and open a GitHub pull
 request. Cards can move through `In progress`, `PR open`, `Done`, and failure
-columns automatically.
+columns automatically. A lightweight intent check routes ordinary questions
+and Basecamp operations to assistant mode instead, without creating a worktree,
+opening a pull request, or moving the triggering card through the code workflow.
 
 ## Install
 

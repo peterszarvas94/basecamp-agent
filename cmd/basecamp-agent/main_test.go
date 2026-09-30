@@ -92,6 +92,28 @@ func TestInstructionTextIsNotRepeated(t *testing.T) {
 	}
 }
 
+func TestIntentDecisionParsingRequiresExactFinalLine(t *testing.T) {
+	if repo, ok := implementationRequest("thinking\nBASECAMP_IMPLEMENTATION: basecamp-agent"); !ok || repo != "basecamp-agent" {
+		t.Fatalf("implementation decision = %q, %v", repo, ok)
+	}
+	for _, invalid := range []string{
+		"BASECAMP_IMPLEMENTATION: basecamp agent",
+		"BASECAMP_IMPLEMENTATION: path/to/repo",
+		"BASECAMP_IMPLEMENTATION:",
+		"BASECAMP_IMPLEMENTATION: repo\nmore text",
+	} {
+		if repo, ok := implementationRequest(invalid); ok {
+			t.Errorf("accepted invalid implementation decision %q as %q", invalid, repo)
+		}
+	}
+	if !assistantRequest("brief reason\nBASECAMP_ASSISTANT") {
+		t.Error("assistant decision was not recognized")
+	}
+	if assistantRequest("BASECAMP_ASSISTANT\nmore text") {
+		t.Error("assistant marker must be the final line")
+	}
+}
+
 func TestFailureMessageLeadsWithTheCause(t *testing.T) {
 	out := strings.Join([]string{
 		"Reading additional input from stdin...",

@@ -9,6 +9,13 @@ developer-facing detail here.
 The service accepts trusted Basecamp work and dispatches it to local Codex or
 Claude CLIs. Its main pieces are:
 
+- A tool-free intent pass routes each request to assistant or implementation
+  mode. Assistant mode may answer and perform project-scoped Basecamp work but
+  never touches repositories or the automatic card lifecycle. Implementation
+  mode requires exactly one allowlisted repository and uses the full worktree,
+  PR, and card workflow. Intent models are deliberately economical; making
+  mode-specific models configurable is future work.
+
 - `main.go`: configuration, Basecamp webhook verification, dispatch, worker
   execution, and HTTP server startup.
 - `cli.go`: Cobra commands, setup, config mutation, webhook reconciliation,
