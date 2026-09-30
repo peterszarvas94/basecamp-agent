@@ -306,6 +306,27 @@ func TestCancelledJobIsTerminal(t *testing.T) {
 	}
 }
 
+func TestOnlyTheNewestAttemptNeedsAttention(t *testing.T) {
+	first := JobStatus{ID: "1-codex", State: "failed", Agent: "codex", EventID: 1}
+	second := JobStatus{ID: "1-codex-retry-2", State: "failed", Agent: "codex", EventID: 1, Attempt: 2}
+	other := JobStatus{ID: "1-claude", State: "failed", Agent: "claude", EventID: 1}
+	all := []JobStatus{first, second, other}
+	if got := retriedAs(first, all); got != second.ID {
+		t.Errorf("retriedAs(first) = %q, want %q", got, second.ID)
+	}
+	if needsAttention(first, all) {
+		t.Error("a restarted attempt should not need attention")
+	}
+	if !needsAttention(second, all) || !needsAttention(other, all) {
+		t.Error("newest attempts per agent should need attention")
+	}
+	// A retry recorded before its attempt started still counts.
+	queued := JobStatus{ID: "2-codex", State: "failed", Agent: "codex", EventID: 2, RetriedAs: "2-codex-retry-2"}
+	if needsAttention(queued, []JobStatus{queued}) {
+		t.Error("a job with a recorded retry should not need attention")
+	}
+}
+
 func TestFailedAndStoppedJobsCanBeCancelled(t *testing.T) {
 	for _, state := range []string{"failed", "stopped"} {
 		if !isCancellableJobState(state) {

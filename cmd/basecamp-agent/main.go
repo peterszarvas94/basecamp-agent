@@ -136,6 +136,8 @@ type Server struct {
 	active   map[string]context.CancelFunc
 	opsMu    sync.Mutex
 	opsSubs  map[chan struct{}]struct{}
+	// retryMu serializes restarts, so one failed attempt yields one retry.
+	retryMu sync.Mutex
 }
 
 type Job struct {

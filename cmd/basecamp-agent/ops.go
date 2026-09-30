@@ -59,6 +59,8 @@ type JobStatus struct {
 	EndedAt   string `json:"ended_at,omitempty"`
 	PRURL     string `json:"pr_url,omitempty"`
 	Message   string `json:"message,omitempty"`
+	// RetriedAs is the attempt a restart of this job started.
+	RetriedAs string `json:"retried_as,omitempty"`
 }
 
 func (s *Server) registerOpsRoutes(mux *http.ServeMux) {
@@ -360,6 +362,28 @@ func isCancellableJobState(state string) bool {
 	return state == "failed" || state == "stopped"
 }
 
+// retriedAs names the attempt that replaced a job, or "" while the job is
+// still the newest attempt of its event. Jobs restarted before RetriedAs was
+// recorded are matched by their later attempts.
+func retriedAs(st JobStatus, all []JobStatus) string {
+	if st.RetriedAs != "" {
+		return st.RetriedAs
+	}
+	newest, attempt := "", max(st.Attempt, 1)
+	for _, other := range all {
+		if other.EventID == st.EventID && other.Agent == st.Agent && max(other.Attempt, 1) > attempt {
+			newest, attempt = other.ID, max(other.Attempt, 1)
+		}
+	}
+	return newest
+}
+
+// needsAttention reports a failed or stopped job that nobody has restarted or
+// dismissed yet. Only such a job offers Restart and Dismiss.
+func needsAttention(st JobStatus, all []JobStatus) bool {
+	return isCancellableJobState(st.State) && retriedAs(st, all) == ""
+}
+
 func processGroupAlive(pgid int) bool {
 	return syscall.Kill(-pgid, 0) == nil
 }
@@ -550,7 +574,11 @@ func (s *Server) opsCancelJob(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	if !isCancellableJobState(st.State) {
-		http.Error(w, "only a stopped or failed job can be cancelled", http.StatusConflict)
+		http.Error(w, "only a stopped or failed job can be dismissed", http.StatusConflict)
+		return
+	}
+	if next := retriedAs(st, s.readStatuses()); next != "" {
+		http.Error(w, "job was already restarted as "+next, http.StatusConflict)
 		return
 	}
 	job, err := s.readJobRecord(id)
@@ -558,8 +586,8 @@ func (s *Server) opsCancelJob(w http.ResponseWriter, r *http.Request, id string)
 		job = Job{Agent: st.Agent, Target: st.Target}
 	}
 	job.JobID, job.JobDir = id, filepath.Join(s.jobsRoot(), id)
-	s.writeJobStatus(job, "cancelled", 0, st.PRURL, "Cancelled by an operator; this run will not be retried.")
-	log.Printf("cancelled job=%s", id)
+	s.writeJobStatus(job, "cancelled", 0, st.PRURL, "Dismissed by an operator; this run will not be retried.")
+	log.Printf("dismissed job=%s", id)
 	s.notifyOps()
 	w.Header().Set("Content-Type", "text/event-stream")
 	s.sendActionPatches(w, r, id)
@@ -576,7 +604,13 @@ func (s *Server) opsRestartJob(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	if st.State == "cancelled" {
-		http.Error(w, "cancelled jobs cannot be restarted", http.StatusConflict)
+		http.Error(w, "dismissed jobs cannot be restarted", http.StatusConflict)
+		return
+	}
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	if next := retriedAs(st, s.readStatuses()); next != "" {
+		http.Error(w, "job was already restarted as "+next, http.StatusConflict)
 		return
 	}
 	job, err := s.readJobRecord(id)
@@ -599,6 +633,12 @@ func (s *Server) opsRestartJob(w http.ResponseWriter, r *http.Request, id string
 	job.LocalBranch, job.Upstream, job.ExistingPR = "", "", ""
 	select {
 	case s.jobs <- job:
+		// Record the retry on the old job at once: the new attempt writes its
+		// own status only when a worker picks it up.
+		st.RetriedAs = jobID(job)
+		if b, err := json.MarshalIndent(st, "", "  "); err == nil {
+			_ = os.WriteFile(filepath.Join(s.jobsRoot(), id, "status.json"), b, 0600)
+		}
 		s.notifyOps()
 		w.Header().Set("Content-Type", "text/event-stream")
 		s.sendActionPatches(w, r, id)
@@ -844,18 +884,22 @@ func renderFragment(c templ.Component) string {
 }
 
 func (s *Server) renderJobsTable(project int64) string {
-	v := jobsView{Project: project}
-	for _, st := range s.readStatuses() {
+	v := jobsView{Project: project, RetriedAs: map[string]string{}}
+	all := s.readStatuses()
+	for _, st := range all {
 		if project != 0 && jobProjectID(st.Target) != project {
 			continue
 		}
 		v.Jobs = append(v.Jobs, st)
+		if next := retriedAs(st, all); next != "" {
+			v.RetriedAs[st.ID] = next
+		}
 		switch {
 		case isActiveJobState(st.State):
 			v.Active++
 		case st.State == "completed":
 			v.Completed++
-		case st.State == "failed" || st.State == "stopped":
+		case needsAttention(st, all):
 			v.Attention++
 		}
 	}
@@ -867,7 +911,7 @@ func (s *Server) renderJobDetail(id string) string {
 	if err != nil {
 		return renderFragment(jobDetail(jobDetailView{}))
 	}
-	return renderFragment(jobDetail(jobDetailView{Found: true, Status: st}))
+	return renderFragment(jobDetail(jobDetailView{Found: true, Status: st, RetriedAs: retriedAs(st, s.readStatuses())}))
 }
 
 // projectMenuItems lists all jobs and each configured project with job

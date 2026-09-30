@@ -156,6 +156,10 @@ recover that outcome instead of calling the job failed. Failed jobs get the
 same check at startup: if the newest run's own commit is the pushed branch head
 and the branch has a PR, mark it completed and move the card to PR open.
 Retries inspect prior status, logs, and worktrees, then use a fresh worktree.
+Each attempt can be restarted once: a restart records `retried_as` on the old
+attempt, and only the newest failed or stopped attempt of an event offers
+Restart or Dismiss and counts as needing attention. Dismiss stores the
+`cancelled` state.
 
 Parse external CLI output from stdout only, and tolerantly: shims such as mise
 print extra lines around the answer.

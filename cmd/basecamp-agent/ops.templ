@@ -27,13 +27,16 @@ type jobsView struct {
 	Active    int
 	Completed int
 	Attention int
+	// RetriedAs maps a restarted job to the attempt that replaced it.
+	RetriedAs map[string]string
 }
 
 // jobDetailView is the live-patched body of a job page. The job output is
 // sent separately, as the output signal.
 type jobDetailView struct {
-	Found  bool
-	Status JobStatus
+	Found     bool
+	Status    JobStatus
+	RetriedAs string
 }
 
 const logPanelClass = "max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-box bg-base-200 p-4 font-mono text-sm"
@@ -134,7 +137,7 @@ templ jobsSection(v jobsView) {
 			@statTile("Total jobs", strconv.Itoa(len(v.Jobs)), "", "retained runs")
 			@statTile("Active", strconv.Itoa(v.Active), "text-info", "preparing / running")
 			@statTile("Completed", strconv.Itoa(v.Completed), "text-success", "PRs and clean exits")
-			@statTile("Needs attention", strconv.Itoa(v.Attention), "text-warning", "failed or stopped")
+			@statTile("Needs attention", strconv.Itoa(v.Attention), "text-warning", "failed or stopped, not retried")
 		</div>
 		if len(v.Jobs) == 0 {
 			<div class="card border border-dashed border-base-300 bg-base-100 shadow">
@@ -164,7 +167,7 @@ templ jobsSection(v jobsView) {
 							</thead>
 							<tbody>
 								for _, st := range v.Jobs {
-									@jobRow(st, v.Project)
+									@jobRow(st, v.Project, v.RetriedAs[st.ID])
 								}
 							</tbody>
 						</table>
@@ -175,7 +178,7 @@ templ jobsSection(v jobsView) {
 	</section>
 }
 
-templ jobRow(st JobStatus, project int64) {
+templ jobRow(st JobStatus, project int64, retriedAs string) {
 	<tr>
 		<td>
 			@stateBadge(st.State)
@@ -204,11 +207,13 @@ templ jobRow(st JobStatus, project int64) {
 				if st.PRURL != "" {
 					<a class="btn join-item btn-xs btn-primary" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(st.PRURL) }>PR</a>
 				}
-				if st.State == "failed" || st.State == "stopped" {
+				// Only the newest attempt can be restarted or dismissed; older
+				// ones point at the attempt that replaced them.
+				if retriedAs != "" {
+					<a class="btn join-item btn-xs btn-ghost" href={ templ.SafeURL("/ops/jobs/" + retriedAs) }>Retried</a>
+				} else if isCancellableJobState(st.State) {
 					<button class="btn join-item btn-xs btn-warning" data-on:click={ datastarPost(jobActionURL(st.ID, "restart", project, false)) }>Restart</button>
-				}
-				if isCancellableJobState(st.State) {
-					<button class="btn join-item btn-xs btn-outline btn-error" data-on:click={ datastarPost(jobActionURL(st.ID, "cancel", project, false)) }>Cancel</button>
+					<button class="btn join-item btn-xs btn-outline btn-error" data-on:click={ datastarPost(jobActionURL(st.ID, "cancel", project, false)) }>Dismiss</button>
 				}
 			</div>
 		</td>
@@ -233,11 +238,11 @@ templ jobDetail(v jobDetailView) {
 					<div class="card-actions mt-4">
 						if isActiveJobState(v.Status.State) {
 							<button class="btn btn-error btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "stop", 0, true)) }>Stop job</button>
-						} else if v.Status.State == "failed" || v.Status.State == "stopped" {
+						} else if v.RetriedAs != "" {
+							<a class="btn btn-ghost btn-sm" href={ templ.SafeURL("/ops/jobs/" + v.RetriedAs) }>Retried as { v.RetriedAs }</a>
+						} else if isCancellableJobState(v.Status.State) {
 							<button class="btn btn-warning btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "restart", 0, true)) }>Restart as fresh attempt</button>
-						}
-						if isCancellableJobState(v.Status.State) {
-							<button class="btn btn-outline btn-error btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "cancel", 0, true)) }>Cancel</button>
+							<button class="btn btn-outline btn-error btn-sm" data-on:click={ datastarPost(jobActionURL(v.Status.ID, "cancel", 0, true)) }>Dismiss</button>
 						}
 						if v.Status.Target != "" {
 							<a class="btn btn-outline btn-sm" target="_blank" rel="noopener noreferrer" href={ templ.SafeURL(basecampAppURL(v.Status.Target)) }>Basecamp trigger</a>
