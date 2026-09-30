@@ -55,6 +55,20 @@ func TestCardURLDetection(t *testing.T) {
 	}
 }
 
+func TestTodoURLDetection(t *testing.T) {
+	for target, want := range map[string]bool{
+		"https://3.basecampapi.com/123/buckets/456/todos/789.json":             true,
+		"https://app.basecamp.com/123/buckets/456/todos/789":                   true,
+		"https://3.basecampapi.com/123/buckets/456/card_tables/cards/789.json": false,
+		"https://3.basecampapi.com/123/buckets/456/todolists/789.json":         false,
+		"https://3.basecampapi.com/123/buckets/456/todolists/1/todos/789.json": true,
+	} {
+		if got := isTodoURL(target); got != want {
+			t.Errorf("isTodoURL(%q) = %v, want %v", target, got, want)
+		}
+	}
+}
+
 func TestColumnTitleMatchIgnoresCaseAndPadding(t *testing.T) {
 	if !sameColumn(" In Progress ", "in progress") {
 		t.Error("expected padded, differently cased titles to match")

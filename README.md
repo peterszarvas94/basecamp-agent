@@ -6,6 +6,8 @@ request. Cards can move through `In progress`, `PR open`, `Done`, and failure
 columns automatically. A lightweight intent check routes ordinary questions
 and Basecamp operations to assistant mode instead, without creating a worktree,
 opening a pull request, or moving the triggering card through the code workflow.
+When implementation starts from a todo, merging its pull request completes that
+todo.
 
 ## Install
 

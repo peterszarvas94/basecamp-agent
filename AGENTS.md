@@ -117,6 +117,10 @@ When card movement is enabled:
 - PR merge moves it to `cards.done`.
 - Failure or stop moves it to `cards.failed`.
 
+For implementation jobs originating from a todo, merging the associated pull
+request completes the todo. Pull-request open/reopen events do not change todos,
+and closing without merging leaves them open.
+
 Column lookup is case-insensitive. A failed column lookup or move is logged and
 skipped; it must not fail the coding job.
 

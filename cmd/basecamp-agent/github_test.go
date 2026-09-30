@@ -6,9 +6,36 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCompleteTodoUsesJobProfileAndProject(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "basecamp")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argsPath + "\"\n"
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{BasecampBin: bin, WorkDir: dir}}
+	ev := WebhookEvent{}
+	ev.Recording.Bucket.ID = 456
+	target := "https://3.basecampapi.com/123/buckets/456/todos/789.json"
+	if err := s.completeTodo(ev, target, "codex-bot"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{"-P", "codex-bot", "todos", "complete", target, "--project", "456", "--json", ""}, "\n")
+	if string(b) != want {
+		t.Fatalf("basecamp args = %q, want %q", b, want)
+	}
+}
 
 func githubSignature(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))

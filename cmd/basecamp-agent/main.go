@@ -1110,6 +1110,17 @@ func isCardURL(target string) bool {
 	return strings.Contains(target, "/card_tables/cards/")
 }
 
+func isTodoURL(target string) bool {
+	return strings.Contains(target, "/todos/")
+}
+
+func (s *Server) completeTodo(ev WebhookEvent, target, profile string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, err := s.basecampCombined(ctx, "-P", profile, "todos", "complete", target, "--project", strconv.FormatInt(ev.Recording.Bucket.ID, 10), "--json")
+	return err
+}
+
 // nestedMap walks a decoded JSON object down the given keys.
 func nestedMap(v any, keys ...string) map[string]any {
 	m, _ := v.(map[string]any)

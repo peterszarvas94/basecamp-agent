@@ -114,8 +114,8 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid pull request payload", http.StatusBadRequest)
 		return
 	}
-	column, shouldMove := githubCardTransition(event.Action, event.PullRequest.Merged, s.cfg.Cards)
-	if !shouldMove {
+	_, shouldHandle := githubCardTransition(event.Action, event.PullRequest.Merged, s.cfg.Cards)
+	if !shouldHandle {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -135,10 +135,24 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	if !isCardURL(job.Target) {
-		http.Error(w, "associated Basecamp item is not a card", http.StatusConflict)
+	if isTodoURL(job.Target) {
+		// Todos have no PR-open state. Complete them only after a merge; opened
+		// and reopened events are acknowledged without changing the todo.
+		if event.Action == "closed" && event.PullRequest.Merged {
+			if err := s.completeTodo(job.Event, job.Target, job.Profile); err != nil {
+				http.Error(w, "Basecamp todo completion failed", http.StatusBadGateway)
+				return
+			}
+			log.Printf("github pull request merged pr=%s completed_todo=%s", event.PullRequest.HTMLURL, job.Target)
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	if !isCardURL(job.Target) {
+		http.Error(w, "associated Basecamp item is not a card or todo", http.StatusConflict)
+		return
+	}
+	column, _ := githubCardTransition(event.Action, event.PullRequest.Merged, s.cfg.Cards)
 	if err := s.moveCard(job.Event, job.Target, column, job.Profile); err != nil {
 		http.Error(w, "Basecamp card move failed", http.StatusBadGateway)
 		return
