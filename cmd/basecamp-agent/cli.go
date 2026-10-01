@@ -770,6 +770,23 @@ func commandOutput(name string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// decodeCommandJSON accepts JSON surrounded by wrapper progress lines. Only
+// callers' stdout belongs here; stderr must never supply an apparent answer.
+func decodeCommandJSON(out []byte, dest any) error {
+	for len(out) > 0 {
+		line := bytes.TrimSpace(out)
+		if len(line) > 0 && (line[0] == '[' || line[0] == '{' || bytes.HasPrefix(line, []byte("null"))) {
+			return json.NewDecoder(bytes.NewReader(line)).Decode(dest)
+		}
+		_, rest, found := bytes.Cut(out, []byte("\n"))
+		if !found {
+			break
+		}
+		out = rest
+	}
+	return errors.New("command stdout contains no JSON answer")
+}
+
 func newGitHubCommand(opts *cliOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "github", Short: "Manage GitHub authentication, repositories, and webhooks"}
 	cmd.AddCommand(&cobra.Command{Use: "login", Short: "Authenticate using GitHub CLI", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -837,21 +854,27 @@ func newGitHubCommand(opts *cliOptions) *cobra.Command {
 		return nil
 	}
 	repos := &cobra.Command{Use: "repo", Short: "Manage local repositories"}
-	repos.AddCommand(add, create, &cobra.Command{Use: "list", Short: "List configured repositories", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	var keepRepoWebhook bool
+	removeRepo := &cobra.Command{Use: "remove <name>", Short: "Remove a repository and its GitHub webhook", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := readOrDefaultConfig(opts.configPath)
 		if err != nil {
 			return err
 		}
-		return printRepos(opts, cfg.AllowedRepos)
-	}}, &cobra.Command{Use: "remove <name>", Short: "Remove a repository from the allowlist", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := readOrDefaultConfig(opts.configPath)
-		if err != nil {
-			return err
-		}
-		kept := cfg.AllowedRepos[:0]
+		kept := make(AllowedRepoList, 0, len(cfg.AllowedRepos))
 		for _, repo := range cfg.AllowedRepos {
 			if repo.Name != args[0] {
 				kept = append(kept, repo)
+				continue
+			}
+			if !keepRepoWebhook && cfg.PublicURL != "" {
+				slug, err := githubSlug(repo.Path)
+				if err != nil {
+					return err
+				}
+				callback := strings.TrimRight(cfg.PublicURL, "/") + "/github/webhook"
+				if _, err := reconcileGitHubWebhook(opts, slug, callback, cfg.GitHub.WebhookSecret, true); err != nil {
+					return fmt.Errorf("remove webhook (pass --keep-webhook to skip): %w", err)
+				}
 			}
 		}
 		cfg.AllowedRepos = kept
@@ -861,6 +884,14 @@ func newGitHubCommand(opts *cliOptions) *cobra.Command {
 			}
 		}
 		return writeConfig(opts.configPath, cfg, opts.dryRun, opts.out)
+	}}
+	removeRepo.Flags().BoolVar(&keepRepoWebhook, "keep-webhook", false, "leave the repository's GitHub webhook in place")
+	repos.AddCommand(add, create, removeRepo, &cobra.Command{Use: "list", Short: "List configured repositories", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := readOrDefaultConfig(opts.configPath)
+		if err != nil {
+			return err
+		}
+		return printRepos(opts, cfg.AllowedRepos)
 	}})
 	cmd.AddCommand(repos)
 	webhooks := &cobra.Command{Use: "webhook", Short: "Reconcile GitHub repository webhooks"}
@@ -1195,7 +1226,7 @@ func reconcileGitHubWebhook(opts *cliOptions, slug, callback, secret string, rem
 			URL string `json:"url"`
 		} `json:"config"`
 	}
-	if err := json.Unmarshal(b, &hooks); err != nil {
+	if err := decodeCommandJSON(b, &hooks); err != nil {
 		return false, err
 	}
 	for _, hook := range hooks {
@@ -1319,7 +1350,7 @@ func reconcileBasecampWebhook(opts *cliOptions, bin, profile string, project int
 		return err
 	}
 	var raw any
-	if err := json.Unmarshal(b, &raw); err != nil {
+	if err := decodeCommandJSON(b, &raw); err != nil {
 		return err
 	}
 	id := findWebhookID(raw, callback)

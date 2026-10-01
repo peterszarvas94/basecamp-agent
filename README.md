@@ -154,6 +154,10 @@ basecamp-agent project add --account 123 --project 456 --creator 789 --default-r
 basecamp-agent project list
 basecamp-agent project columns 456   # create missing card columns
 
+# Remove connections and their webhooks (keeps the repository and project)
+basecamp-agent project remove 456
+basecamp-agent github repo remove my-app
+
 # Reconcile webhooks after changing configuration
 basecamp-agent basecamp webhook sync
 basecamp-agent github webhook sync

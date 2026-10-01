@@ -405,3 +405,91 @@ func TestRailwayPreviewSetupAcceptsCustomBase(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoRemovalCleansWebhookBeforeConfig(t *testing.T) {
+	for _, mode := range []string{"remove", "failure", "dry-run", "keep-webhook"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			calls := filepath.Join(dir, "calls")
+			t.Setenv("REMOVAL_CALLS", calls)
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			git := "#!/bin/sh\nprintf '%s\\n' 'git@github.com:owner/app.git'\n"
+			gh := `#!/bin/sh
+printf '%s\n' "$*" >> "$REMOVAL_CALLS"
+if [ "$2" = '--method' ]; then
+  if [ "$REMOVAL_FAIL" = '1' ]; then exit 1; fi
+else
+  printf '%s\n' 'mise installing gh' '[{"id":123,"config":{"url":"https://example.test/github/webhook"}},{"id":456,"config":{"url":"https://other.test/webhook"}}]' 'mise finished'
+  printf '%s\n' 'stderr noise' >&2
+fi
+`
+			for name, script := range map[string]string{"git": git, "gh": gh} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("REMOVAL_FAIL", "0")
+			if mode == "failure" {
+				t.Setenv("REMOVAL_FAIL", "1")
+			}
+			config := filepath.Join(dir, "config.json")
+			cfg := defaultConfig()
+			cfg.PublicURL = "https://example.test"
+			cfg.AllowedRepos = AllowedRepoList{{Name: "app", Path: dir}, {Name: "other", Path: "/srv/other"}}
+			cfg.ProjectRepos = map[string]string{"20": "app", "21": "other"}
+			if err := writeConfig(config, cfg, false, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"github", "repo", "remove", "app"}
+			if mode == "dry-run" {
+				args = append(args, "--dry-run")
+			}
+			if mode == "keep-webhook" {
+				args = append(args, "--keep-webhook")
+			}
+			_, err := runCLIForTest(t, config, args...)
+			if (err != nil) != (mode == "failure") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			saved, err := readOrDefaultConfig(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preserved := mode == "failure" || mode == "dry-run"
+			if hasRepo(saved, "app") != preserved || (saved.ProjectRepos["20"] == "app") != preserved {
+				t.Fatalf("unexpected config: %+v", saved)
+			}
+			if !hasRepo(saved, "other") || saved.ProjectRepos["21"] != "other" {
+				t.Fatal("unrelated repository changed")
+			}
+			log, _ := os.ReadFile(calls)
+			if mode == "dry-run" || mode == "keep-webhook" {
+				if len(log) != 0 {
+					t.Fatalf("unexpected external mutation: %s", log)
+				}
+			} else if !strings.Contains(string(log), "api --method DELETE repos/owner/app/hooks/123") || strings.Contains(string(log), "hooks/456") {
+				t.Fatalf("wrong webhook cleanup: %s", log)
+			}
+			if !preserved {
+				if _, err := runCLIForTest(t, config, args...); err != nil {
+					t.Fatalf("repeated removal: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestDecodeCommandJSON(t *testing.T) {
+	for _, input := range []string{`[{"id":123}]`, "mise progress\n[\n{\"id\":123}\n]\nfinished"} {
+		var hooks []struct{ ID int }
+		if err := decodeCommandJSON([]byte(input), &hooks); err != nil || len(hooks) != 1 || hooks[0].ID != 123 {
+			t.Fatalf("decode %q: %v, %+v", input, err, hooks)
+		}
+	}
+	for _, input := range []string{"mise progress only", "mise progress\n[broken"} {
+		var hooks []any
+		if err := decodeCommandJSON([]byte(input), &hooks); err == nil {
+			t.Fatalf("accepted missing or malformed JSON: %q", input)
+		}
+	}
+}
